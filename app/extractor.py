@@ -21,6 +21,7 @@ async def extract_uploaded_files(files: list[UploadFile]) -> list[dict[str, Any]
                 "contentType": upload.content_type,
                 "kind": _kind(filename, upload.content_type),
                 "text": extract_text(filename, content, upload.content_type),
+                "content": content,
                 "size": len(content),
             }
         )

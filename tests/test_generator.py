@@ -1,83 +1,99 @@
-from app.generator import generate_layout
+import json
+from types import SimpleNamespace
+
+import pytest
+
+from app.generator import AIConfigurationError, generate_layout
 
 
-def test_generate_layout_extracts_product_specs_from_transfer_table_text():
-    text = """
-    品名 80S天丝棉印花四件套
-    花名 温莎城堡(卡其色) 温莎城堡(雾蓝色)
-    1010103855/1010103857
-    被  套：(200×230)cm×1床
-    床  单：(245×245)cm×1床
-    短枕套：(52×72)cm×2个
-    1010103856/1010103858
-    加大被套：(248×248)cm×1床
-    加大床单：(270×260)cm×1床
-    短 枕 套：(52×72)cm×2个
-    """
+class FakeResponses:
+    def __init__(self, payload):
+        self.payload = payload
+        self.calls = []
 
-    result = generate_layout(
-        extracted_files=[{"filename": "transfer.doc", "text": text, "kind": "document"}],
-        prompt="模板 QUEEN，比例 1:50，单位 cm，床单圆角",
-        parameters={},
-    )
-
-    layout = result["layout"]
-    assert layout["schemaVersion"] == "1.0.0"
-    assert layout["documentType"] == "product-layout"
-    assert layout["meta"]["productName"] == "温莎城堡"
-    assert layout["meta"]["scale"] == "1:50"
-    assert layout["meta"]["unit"] == "cm"
-    assert layout["titleBlock"]["template"] == "queen-standard-a3"
-
-    variant_ids = {variant["id"] for variant in layout["variants"]}
-    assert {"1010103855", "1010103856", "1010103857", "1010103858"} <= variant_ids
-
-    part_names = {row["partName"] for row in layout["sizeTable"]["rows"]}
-    assert {"被套", "床单", "短枕套", "加大被套", "加大床单"} <= part_names
-
-    bedsheet_components = [
-        component
-        for variant in layout["variants"]
-        for component in variant["components"]
-        if component["name"] in {"床单", "加大床单"}
-    ]
-    assert bedsheet_components
-    assert all(component["shape"].get("corners") for component in bedsheet_components)
+    def create(self, **kwargs):
+        self.calls.append(kwargs)
+        return SimpleNamespace(output_text=json.dumps(self.payload, ensure_ascii=False))
 
 
-def test_generate_layout_honors_structured_parameters_over_extracted_defaults():
-    result = generate_layout(
-        extracted_files=[],
-        prompt="",
-        parameters={
-            "productName": "参数化产品",
-            "template": "custom-demo-template",
-            "scale": "1:25",
-            "unit": "mm",
+class FakeOpenAIClient:
+    def __init__(self, payload):
+        self.responses = FakeResponses(payload)
+
+
+def test_generate_layout_uses_ai_response_as_the_layout_source():
+    ai_payload = {
+        "layout": {
+            "schemaVersion": "1.0.0",
+            "documentType": "product-layout",
+            "meta": {"title": "产品排版图", "productName": "温莎城堡", "scale": "1:50", "unit": "cm"},
+            "technicalRequirements": [{"no": 1, "text": "AI根据上传资料生成"}],
+            "sizeTable": {
+                "columns": ["partName", "finishedSize", "cuttingSizeFace", "cuttingSizeBack"],
+                "rows": [
+                    {
+                        "variantId": "1010103855",
+                        "partId": "ai-quilt",
+                        "partName": "被套",
+                        "finishedSize": {"width": 200, "height": 230},
+                        "cuttingSizeFace": {"width": 204, "height": 234},
+                        "cuttingSizeBack": None,
+                    }
+                ],
+            },
             "variants": [
                 {
-                    "id": "DEMO-001",
-                    "label": "演示型号",
+                    "id": "1010103855",
+                    "label": "1010103855",
+                    "layout": {"mode": "flow", "direction": "horizontal", "gap": 25, "wrap": True},
                     "components": [
                         {
-                            "id": "demo-panel",
-                            "name": "演示裁片",
+                            "id": "ai-quilt",
+                            "name": "被套",
                             "category": "quilt-face",
-                            "quantity": {"perSet": 1, "unit": "页"},
-                            "shape": {"type": "rectangle", "width": 12, "height": 34},
-                            "annotations": [{"kind": "label", "text": "演示裁片", "placement": "inside"}],
+                            "quantity": {"perSet": 1, "unit": "床"},
+                            "shape": {"type": "rectangle", "width": 204, "height": 234},
+                            "display": {"showDimensions": True},
+                            "annotations": [{"kind": "label", "text": "被套", "placement": "inside"}],
+                            "dimensions": {"finishedSize": {"width": 200, "height": 230}},
                         }
                     ],
                 }
             ],
+            "titleBlock": {"template": "queen-standard-a3", "fields": {"图名": "产品排版图", "比例": "1:50", "单位": "cm"}},
         },
+        "validation": {"status": "ok", "warnings": [], "missing": []},
+        "sources": [{"filename": "transfer.txt", "kind": "document", "textLength": 28}],
+    }
+    client = FakeOpenAIClient(ai_payload)
+
+    result = generate_layout(
+        extracted_files=[
+            {
+                "filename": "transfer.txt",
+                "kind": "document",
+                "contentType": "text/plain",
+                "text": "温莎城堡 1010103855 被套：(200×230)cm×1床",
+                "content": b"ignored by fake",
+            }
+        ],
+        prompt="使用 QUEEN 模板，比例 1:50",
+        parameters={"template": "queen-standard-a3"},
+        client=client,
+        model="gpt-test",
     )
 
-    layout = result["layout"]
-    assert layout["meta"]["productName"] == "参数化产品"
-    assert layout["meta"]["scale"] == "1:25"
-    assert layout["meta"]["unit"] == "mm"
-    assert layout["titleBlock"]["template"] == "custom-demo-template"
-    assert layout["variants"][0]["id"] == "DEMO-001"
-    assert layout["variants"][0]["components"][0]["id"] == "demo-panel"
-    assert result["validation"]["status"] == "ok"
+    assert result == ai_payload
+    call = client.responses.calls[0]
+    assert call["model"] == "gpt-test"
+    assert call["text"]["format"]["type"] == "json_schema"
+    assert "product_layout_response" == call["text"]["format"]["name"]
+    user_content = call["input"][1]["content"]
+    assert any(item["type"] == "input_text" and "温莎城堡" in item["text"] for item in user_content)
+
+
+def test_generate_layout_requires_openai_api_key_when_no_client_is_injected(monkeypatch):
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+
+    with pytest.raises(AIConfigurationError):
+        generate_layout(extracted_files=[], prompt="", parameters={})
