@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>产品排版图 JSON Demo</title>
+    <link rel="stylesheet" href="/static/styles.css" />
+  </head>
+  <body>
+    <main class="shell">
+      <section class="workspace">
+        <div class="panel input-panel">
+          <div class="masthead">
+            <p class="eyebrow">FLOWER / CAD BRIDGE</p>
+            <h1>产品排版图 JSON Demo</h1>
+          </div>
+
+          <form id="layout-form" action="/api/layouts/generate" method="post" enctype="multipart/form-data">
+            <label class="field">
+              <span>上传资料</span>
+              <input name="files" type="file" multiple accept=".doc,.docx,.pdf,.png,.jpg,.jpeg,.txt,.json" />
+            </label>
+
+            <label class="field">
+              <span>人工补充参数</span>
+              <textarea name="prompt" rows="5">使用 QUEEN 模板，比例 1:50，单位 cm，床单圆角。生成 demo JSON 给 CAD 渲染。</textarea>
+            </label>
+
+            <label class="field">
+              <span>结构化参数 JSON</span>
+              <textarea name="parameters" rows="7">{
+  "template": "queen-standard-a3"
+}</textarea>
+            </label>
+
+            <button class="submit" type="submit">
+              <span>生成 JSON</span>
+            </button>
+          </form>
+        </div>
+
+        <div class="panel output-panel">
+          <div class="output-head">
+            <div>
+              <p class="eyebrow">API RESPONSE</p>
+              <h2>返回结果</h2>
+            </div>
+            <span id="status" class="status">待生成</span>
+          </div>
+          <pre id="result" class="result">上传文件后，这里会显示 product-layout JSON。</pre>
+        </div>
+      </section>
+    </main>
+    <script src="/static/app.js"></script>
+  </body>
+</html>
