@@ -19,7 +19,7 @@ form.addEventListener("submit", async (event) => {
       throw new Error(body.detail || `HTTP ${response.status}`);
     }
     result.textContent = JSON.stringify(body, null, 2);
-    statusBadge.textContent = body.validation?.status || "ok";
+    statusBadge.textContent = body.documentType || "ok";
     statusBadge.className = "status ok";
   } catch (error) {
     result.textContent = JSON.stringify({ error: String(error.message || error) }, null, 2);

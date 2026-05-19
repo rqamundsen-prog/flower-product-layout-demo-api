@@ -16,17 +16,13 @@ def test_home_page_serves_upload_interface():
 
 def test_generate_layout_api_accepts_files_and_returns_ai_layout_json(monkeypatch):
     ai_payload = {
-        "layout": {
-            "schemaVersion": "1.0.0",
-            "documentType": "product-layout",
-            "meta": {"title": "产品排版图", "productName": "温莎城堡", "scale": "1:50", "unit": "cm"},
-            "technicalRequirements": [{"no": 1, "text": "AI实时分析生成"}],
-            "sizeTable": {"columns": ["partName", "finishedSize"], "rows": []},
-            "variants": [{"id": "1010103855", "label": "1010103855", "layout": {}, "components": []}],
-            "titleBlock": {"template": "queen-standard-a3", "fields": {"图名": "产品排版图"}},
-        },
-        "validation": {"status": "ok", "warnings": [], "missing": []},
-        "sources": [{"filename": "transfer.txt", "kind": "document", "textLength": 64}],
+        "schemaVersion": "1.0.0",
+        "documentType": "product-layout",
+        "meta": {"title": "产品排版图", "productName": "温莎城堡", "scale": "1:50", "unit": "cm"},
+        "technicalRequirements": [{"no": 1, "text": "AI实时分析生成"}],
+        "sizeTable": {"columns": ["partName", "finishedSize"], "rows": []},
+        "variants": [{"id": "1010103855", "label": "1010103855", "layout": {}, "components": []}],
+        "titleBlock": {"template": "queen-standard-a3", "fields": {"图名": "产品排版图"}},
     }
 
     def fake_generate_layout(extracted_files, prompt, parameters):
@@ -61,13 +57,12 @@ def test_generate_layout_api_accepts_files_and_returns_ai_layout_json(monkeypatc
 
     assert response.status_code == 200
     body = response.json()
-    assert body["layout"]["schemaVersion"] == "1.0.0"
-    assert body["layout"]["documentType"] == "product-layout"
-    assert body["layout"]["meta"]["productName"] == "温莎城堡"
-    assert body["layout"]["titleBlock"]["template"] == "queen-standard-a3"
-    assert body["layout"]["variants"]
-    assert body["validation"]["status"] == "ok"
-    assert body["sources"] == [{"filename": "transfer.txt", "kind": "document", "textLength": 64}]
+    assert "layout" not in body
+    assert body["schemaVersion"] == "1.0.0"
+    assert body["documentType"] == "product-layout"
+    assert body["meta"]["productName"] == "温莎城堡"
+    assert body["titleBlock"]["template"] == "queen-standard-a3"
+    assert body["variants"]
 
 
 def test_generate_layout_api_rejects_invalid_parameters_json():

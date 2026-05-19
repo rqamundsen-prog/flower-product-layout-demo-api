@@ -46,25 +46,17 @@ curl -X POST http://127.0.0.1:8000/api/layouts/generate \
   -F "files=@/path/to/排版.pdf"
 ```
 
-Response envelope:
+Response:
 
 ```json
 {
-  "layout": {
-    "schemaVersion": "1.0.0",
-    "documentType": "product-layout",
-    "meta": {},
-    "technicalRequirements": [],
-    "sizeTable": {},
-    "variants": [],
-    "titleBlock": {}
-  },
-  "validation": {
-    "status": "ok",
-    "warnings": [],
-    "missing": []
-  },
-  "sources": []
+  "schemaVersion": "1.0.0",
+  "documentType": "product-layout",
+  "meta": {},
+  "technicalRequirements": [],
+  "sizeTable": {},
+  "variants": [],
+  "titleBlock": {}
 }
 ```
 
@@ -77,13 +69,13 @@ This demo prioritizes end-to-end AI delivery through your local Codex login:
 - Best-effort text extraction from uploaded files.
 - Realtime local `codex exec` analysis using your Codex/ChatGPT login state.
 
-Business rules are intentionally light. Python is only the web/API wrapper and file preprocessor; the `layout` result is produced by Codex CLI in `app/codex_bridge.py`.
+Business rules are intentionally light. Python is only the web/API wrapper and file preprocessor; the `product-layout` result is produced by Codex CLI in `app/codex_bridge.py` and follows the schema from `API数据结构.docx`.
 
 Requirements:
 
 - `codex` CLI installed and logged in on the host machine.
 - `CODEX_MODEL`: optional. Defaults to `gpt-5.5`.
-- `CODEX_TIMEOUT_SECONDS`: optional. Defaults to `240`.
+- `CODEX_TIMEOUT_SECONDS`: optional. Defaults to `600`.
 
 To expose the local demo publicly:
 

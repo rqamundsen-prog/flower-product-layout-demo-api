@@ -1,4 +1,5 @@
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -10,17 +11,13 @@ from app.generator import generate_layout
 
 def _payload(product_name="温莎城堡"):
     return {
-        "layout": {
-            "schemaVersion": "1.0.0",
-            "documentType": "product-layout",
-            "meta": {"title": "产品排版图", "productName": product_name, "scale": "1:50", "unit": "cm"},
-            "technicalRequirements": [{"no": 1, "text": "Codex分析生成"}],
-            "sizeTable": {"columns": ["partName", "finishedSize"], "rows": []},
-            "variants": [{"id": "1010103855", "label": "1010103855", "layout": {}, "components": []}],
-            "titleBlock": {"template": "queen-standard-a3", "fields": {"图名": "产品排版图"}},
-        },
-        "validation": {"status": "ok", "warnings": [], "missing": []},
-        "sources": [{"filename": "transfer.txt", "kind": "document", "textLength": 64}],
+        "schemaVersion": "1.0.0",
+        "documentType": "product-layout",
+        "meta": {"title": "产品排版图", "productName": product_name, "scale": "1:50", "unit": "cm"},
+        "technicalRequirements": [{"no": 1, "text": "Codex分析生成"}],
+        "sizeTable": {"columns": ["partName", "finishedSize"], "rows": []},
+        "variants": [{"id": "1010103855", "label": "1010103855", "layout": {}, "components": []}],
+        "titleBlock": {"template": "queen-standard-a3", "fields": {"图名": "产品排版图"}},
     }
 
 
@@ -76,7 +73,36 @@ def test_codex_bridge_extracts_json_from_markdown_fenced_output():
         runner=fake_runner,
     )
 
-    assert result["layout"]["meta"]["productName"] == "围栏输出"
+    assert result["meta"]["productName"] == "围栏输出"
+
+
+def test_codex_bridge_separates_variadic_image_arguments_from_prompt():
+    expected = _payload("图片参数")
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(expected, ensure_ascii=False))
+        assert "--image" in command
+        assert command[-2] == "--"
+        assert "使用图片分析" in command[-1]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "layout.png",
+                "kind": "image",
+                "contentType": "image/png",
+                "text": "[Image uploaded for visual/layout reference: layout.png]",
+                "content": b"fake image bytes",
+            }
+        ],
+        prompt="使用图片分析",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "图片参数"
 
 
 def test_codex_bridge_raises_on_cli_failure():
@@ -89,6 +115,20 @@ def test_codex_bridge_raises_on_cli_failure():
             prompt="",
             parameters={},
             runner=fake_runner,
+        )
+
+
+def test_codex_bridge_raises_clear_error_on_cli_timeout():
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        raise subprocess.TimeoutExpired(command, timeout)
+
+    with pytest.raises(CodexExecutionError, match="timed out after 9 seconds"):
+        generate_layout_via_codex(
+            extracted_files=[],
+            prompt="",
+            parameters={},
+            runner=fake_runner,
+            timeout_seconds=9,
         )
 
 
