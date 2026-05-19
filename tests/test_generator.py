@@ -3,7 +3,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from app.generator import AIConfigurationError, generate_layout
+from app.generator import AIConfigurationError, AIGenerationError, generate_layout
 
 
 class FakeResponses:
@@ -97,3 +97,21 @@ def test_generate_layout_requires_openai_api_key_when_no_client_is_injected(monk
 
     with pytest.raises(AIConfigurationError):
         generate_layout(extracted_files=[], prompt="", parameters={})
+
+
+def test_generate_layout_wraps_ai_provider_failures():
+    class BrokenResponses:
+        def create(self, **kwargs):
+            raise RuntimeError("provider quota exceeded")
+
+    class BrokenClient:
+        responses = BrokenResponses()
+
+    with pytest.raises(AIGenerationError, match="provider quota exceeded"):
+        generate_layout(
+            extracted_files=[],
+            prompt="",
+            parameters={},
+            client=BrokenClient(),
+            model="gpt-test",
+        )

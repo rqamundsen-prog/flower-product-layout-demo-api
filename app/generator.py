@@ -102,21 +102,24 @@ def generate_layout(
     ai_client = client or _openai_client()
     selected_model = model or os.getenv("OPENAI_MODEL", DEFAULT_MODEL)
 
-    response = ai_client.responses.create(
-        model=selected_model,
-        input=[
-            {"role": "system", "content": SYSTEM_PROMPT},
-            {"role": "user", "content": _build_user_content(extracted_files, prompt, parameters)},
-        ],
-        text={
-            "format": {
-                "type": "json_schema",
-                "name": "product_layout_response",
-                "strict": False,
-                "schema": PRODUCT_LAYOUT_RESPONSE_SCHEMA,
-            }
-        },
-    )
+    try:
+        response = ai_client.responses.create(
+            model=selected_model,
+            input=[
+                {"role": "system", "content": SYSTEM_PROMPT},
+                {"role": "user", "content": _build_user_content(extracted_files, prompt, parameters)},
+            ],
+            text={
+                "format": {
+                    "type": "json_schema",
+                    "name": "product_layout_response",
+                    "strict": False,
+                    "schema": PRODUCT_LAYOUT_RESPONSE_SCHEMA,
+                }
+            },
+        )
+    except Exception as exc:
+        raise AIGenerationError(f"OpenAI request failed: {exc}") from exc
     payload = _parse_response_json(response)
     _validate_ai_payload(payload)
     return payload
