@@ -26,7 +26,7 @@ Fields:
 
 - `files`: one or more `.doc`, `.docx`, `.pdf`, `.png`, `.jpg`, `.txt`, or `.json` files.
 - `prompt`: natural language instructions, for example `请实时分析上传的信息传递表、排版图 PDF/图片，使用 QUEEN 模板，比例 1:50，单位 cm，床单圆角`.
-- `parameters`: JSON object string. Example:
+- `parameters`: optional JSON object string for programmatic callers. The web demo does not show this field because normal users should put all extra information in uploaded files or `prompt`. Example:
 
 ```json
 {
@@ -59,6 +59,36 @@ Response:
   "titleBlock": {}
 }
 ```
+
+## Web Job API
+
+The browser page uses an async job endpoint so long-running local Codex analysis does not keep the browser request open.
+
+`POST /api/layouts/jobs`
+
+Fields:
+
+- `files`: upload files.
+- `prompt`: human instructions.
+- `parameters`: optional JSON object string, normally omitted by the web page.
+
+Response:
+
+```json
+{
+  "jobId": "abc123",
+  "status": "queued",
+  "statusUrl": "/api/layouts/jobs/abc123"
+}
+```
+
+Then poll:
+
+```text
+GET /api/layouts/jobs/{jobId}
+```
+
+Until `status` becomes `completed`, then read `result`.
 
 ## Demo Scope
 
