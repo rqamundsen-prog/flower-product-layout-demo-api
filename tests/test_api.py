@@ -81,11 +81,11 @@ def test_generate_layout_api_rejects_invalid_parameters_json():
     assert "parameters" in response.json()["detail"]
 
 
-def test_generate_layout_api_reports_missing_ai_configuration(monkeypatch):
+def test_generate_layout_api_reports_missing_codex_configuration(monkeypatch):
     def fake_generate_layout(extracted_files, prompt, parameters):
-        from app.generator import AIConfigurationError
+        from app.codex_bridge import CodexConfigurationError
 
-        raise AIConfigurationError("OPENAI_API_KEY is required for realtime AI generation")
+        raise CodexConfigurationError("codex CLI is not installed or not on PATH")
 
     monkeypatch.setattr("app.main.generate_layout", fake_generate_layout)
 
@@ -96,4 +96,4 @@ def test_generate_layout_api_reports_missing_ai_configuration(monkeypatch):
     )
 
     assert response.status_code == 503
-    assert "OPENAI_API_KEY" in response.json()["detail"]
+    assert "codex CLI" in response.json()["detail"]

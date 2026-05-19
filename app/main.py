@@ -10,7 +10,8 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 
 from app.extractor import extract_uploaded_files
-from app.generator import AIConfigurationError, AIGenerationError, generate_layout
+from app.codex_bridge import CodexConfigurationError, CodexExecutionError
+from app.generator import generate_layout
 
 
 app = FastAPI(
@@ -58,7 +59,7 @@ async def generate_layout_endpoint(
     extracted = await extract_uploaded_files(files)
     try:
         return generate_layout(extracted_files=extracted, prompt=prompt, parameters=parsed_parameters)
-    except AIConfigurationError as exc:
+    except CodexConfigurationError as exc:
         raise HTTPException(status_code=503, detail=str(exc)) from exc
-    except AIGenerationError as exc:
+    except CodexExecutionError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc

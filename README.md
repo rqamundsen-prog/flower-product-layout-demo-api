@@ -1,12 +1,12 @@
 # Flower Product Layout Demo API
 
-Demo service for using realtime AI analysis to turn product transfer files, layout references, and user parameters into `product-layout` JSON for CAD-side rendering.
+Demo service for using local Codex CLI / ChatGPT-auth AI analysis to turn product transfer files, layout references, and user parameters into `product-layout` JSON for CAD-side rendering. No OpenAI API key is required for the demo path.
 
 ## Run
 
 ```bash
 python -m pip install -r requirements.txt
-export OPENAI_API_KEY="your_api_key"
+codex login status
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 ```
 
@@ -70,19 +70,26 @@ Response envelope:
 
 ## Demo Scope
 
-This demo prioritizes end-to-end AI delivery:
+This demo prioritizes end-to-end AI delivery through your local Codex login:
 
 - Web upload page.
 - Multipart API for external callers and CAD-side integration.
 - Best-effort text extraction from uploaded files.
-- Realtime OpenAI Responses API analysis with structured JSON output.
+- Realtime local `codex exec` analysis using your Codex/ChatGPT login state.
 
-Business rules are intentionally light. Python is only the web/API wrapper and file preprocessor; the `layout` result is produced by the AI model in `app/generator.py`.
+Business rules are intentionally light. Python is only the web/API wrapper and file preprocessor; the `layout` result is produced by Codex CLI in `app/codex_bridge.py`.
 
-Required environment variables:
+Requirements:
 
-- `OPENAI_API_KEY`: required. The API returns HTTP 503 if this is missing.
-- `OPENAI_MODEL`: optional. Defaults to `gpt-4.1-mini`.
+- `codex` CLI installed and logged in on the host machine.
+- `CODEX_MODEL`: optional. Defaults to `gpt-5.5`.
+- `CODEX_TIMEOUT_SECONDS`: optional. Defaults to `240`.
+
+To expose the local demo publicly:
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8000
+```
 
 ## Test
 
