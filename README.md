@@ -68,8 +68,10 @@ This demo prioritizes end-to-end AI delivery through your local Codex login:
 - Multipart API for external callers and CAD-side integration.
 - Best-effort text extraction from uploaded files.
 - Realtime local `codex exec` analysis using your Codex/ChatGPT login state.
+- Deterministic post-processing for stable CAD/PDF integration: canonical top-level key order, variant IDs, component IDs, component categories, and size-table rows.
 
 Business rules are intentionally light. Python is only the web/API wrapper and file preprocessor; the `product-layout` result is produced by Codex CLI in `app/codex_bridge.py` and follows the schema from `API数据结构.docx`.
+The final API response is normalized in `app/normalizer.py` so repeated demo runs keep stable identifiers such as `1010103855_1010103857`, `quilt-face-main`, `quilt-lining-main`, `quilt-face-lower-small-panel`, `bedsheet`, and `pillowcase-short`.
 
 Requirements:
 

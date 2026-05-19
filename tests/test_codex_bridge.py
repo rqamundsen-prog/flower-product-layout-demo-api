@@ -148,4 +148,7 @@ def test_generate_layout_uses_codex_bridge(monkeypatch):
         parameters={"template": "queen-standard-a3"},
     )
 
-    assert result == expected
+    assert result["meta"]["productName"] == "生成器转发"
+    assert result["titleBlock"]["template"] == "queen-standard-a3"
+    assert result["titleBlock"]["fields"]["比例"] == "1:50"
+    assert result["titleBlock"]["fields"]["单位"] == "cm"
