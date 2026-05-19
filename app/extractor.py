@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import subprocess
 import tempfile
 import zipfile
@@ -8,6 +9,12 @@ from typing import Any
 from xml.etree import ElementTree
 
 from fastapi import UploadFile
+
+
+MAX_RENDERED_PAGES = int(os.getenv("FLOWER_MAX_RENDERED_PAGES", "8"))
+RENDER_DPI = int(os.getenv("FLOWER_RENDER_DPI", "180"))
+RENDER_TIMEOUT_SECONDS = int(os.getenv("FLOWER_RENDER_TIMEOUT_SECONDS", "30"))
+OFFICE_SUFFIXES = {".doc", ".docx"}
 
 
 async def extract_uploaded_files(files: list[UploadFile]) -> list[dict[str, Any]]:
@@ -25,7 +32,17 @@ async def extract_uploaded_files(files: list[UploadFile]) -> list[dict[str, Any]
                 "size": len(content),
             }
         )
+        extracted.extend(extract_visual_references(filename, content, upload.content_type))
     return extracted
+
+
+def extract_visual_references(filename: str, content: bytes, content_type: str | None = None) -> list[dict[str, Any]]:
+    suffix = Path(filename).suffix.lower()
+    if suffix == ".pdf" or content_type == "application/pdf":
+        return _render_pdf_pages(filename, content)
+    if suffix in OFFICE_SUFFIXES:
+        return _render_office_pages(filename, content)
+    return []
 
 
 def extract_text(filename: str, content: bytes, content_type: str | None = None) -> str:
@@ -110,3 +127,87 @@ def _extract_pdf_text(filename: str, content: bytes) -> str:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return ""
     return result.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def _render_office_pages(filename: str, content: bytes) -> list[dict[str, Any]]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        source_path = temp_path / _safe_filename(filename)
+        source_path.write_bytes(content)
+        try:
+            result = subprocess.run(
+                ["soffice", "--headless", "--convert-to", "pdf", "--outdir", str(temp_path), str(source_path)],
+                check=False,
+                capture_output=True,
+                timeout=RENDER_TIMEOUT_SECONDS,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+
+        pdf_path = source_path.with_suffix(".pdf")
+        if not pdf_path.exists():
+            matches = sorted(temp_path.glob("*.pdf"))
+            if not matches:
+                return []
+            pdf_path = matches[0]
+        return _render_pdf_pages(filename, pdf_path.read_bytes())
+
+
+def _render_pdf_pages(filename: str, content: bytes) -> list[dict[str, Any]]:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        source_path = temp_path / _safe_filename(filename)
+        source_path.write_bytes(content)
+        output_prefix = temp_path / "page"
+        command = [
+            "pdftoppm",
+            "-png",
+            "-r",
+            str(RENDER_DPI),
+            "-f",
+            "1",
+            "-l",
+            str(MAX_RENDERED_PAGES),
+            str(source_path),
+            str(output_prefix),
+        ]
+        try:
+            result = subprocess.run(command, check=False, capture_output=True, timeout=RENDER_TIMEOUT_SECONDS)
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return []
+        if result.returncode != 0:
+            return []
+
+        rendered = []
+        for page_index, page_path in enumerate(_rendered_page_paths(output_prefix), start=1):
+            image_content = page_path.read_bytes()
+            rendered.append(
+                {
+                    "filename": f"{filename}.page-{page_index}.png",
+                    "contentType": "image/png",
+                    "kind": "image",
+                    "text": f"[Rendered PDF page {page_index} from {filename} for visual/layout reference]",
+                    "content": image_content,
+                    "size": len(image_content),
+                    "derivedFrom": filename,
+                    "sourcePage": page_index,
+                }
+            )
+        return rendered
+
+
+def _rendered_page_paths(output_prefix: Path) -> list[Path]:
+    return sorted(output_prefix.parent.glob(f"{output_prefix.name}-*.png"), key=_page_sort_key)
+
+
+def _page_sort_key(path: Path) -> int:
+    try:
+        return int(path.stem.rsplit("-", 1)[-1])
+    except ValueError:
+        return 10_000
+
+
+def _safe_filename(filename: str) -> str:
+    return Path(filename).name.replace("/", "_").replace(":", "_") or "upload"

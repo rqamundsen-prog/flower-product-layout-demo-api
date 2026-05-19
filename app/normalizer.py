@@ -37,22 +37,6 @@ PART_ORDER = {
     "pillowcase": 55,
 }
 
-CORE_COMPONENTS = [
-    ("quilt-face-main", "被面A版", "quilt-face"),
-    ("quilt-lining-main", "被里B版", "quilt-lining"),
-    ("quilt-face-lower-small-panel", "被面下方小页", "quilt-face"),
-    ("bedsheet", "床单", "bedsheet"),
-    ("pillowcase-short", "短枕套", "pillowcase"),
-]
-CORE_COMPONENT_IDS = {component_id for component_id, _name, _category in CORE_COMPONENTS}
-KNOWN_WINDSOR_VARIANT_IDS = {
-    "1010103855_1010103857",
-    "1010103856_1010103858",
-    "queen-200x230",
-    "queen-248x248",
-}
-
-
 def normalize_product_layout(payload: dict[str, Any], parameters: dict[str, Any] | None = None) -> dict[str, Any]:
     params = parameters or {}
     source = copy.deepcopy(payload)
@@ -128,8 +112,6 @@ def _normalize_variants(value: Any) -> tuple[list[dict[str, Any]], dict[str, dic
             components.append(normalized_component)
 
         components = _dedupe_components(components)
-        if _is_known_windsor_variant(new_variant_id, variant_text):
-            components = _ensure_core_components(components)
         components.sort(key=lambda component: (PART_ORDER.get(component.get("id"), 1000), str(component.get("id"))))
         normalized_variant = dict(item)
         normalized_variant["id"] = new_variant_id
@@ -170,12 +152,6 @@ def _normalize_size_table(
     variant_index = {variant["id"]: index for index, variant in enumerate(variants)}
     normalized_rows = []
 
-    known_variant_ids = {
-        variant["id"]
-        for variant in variants
-        if _is_known_windsor_variant(str(variant.get("id") or ""), _json_text(variant))
-    }
-
     for row in rows:
         if not isinstance(row, dict):
             continue
@@ -185,12 +161,9 @@ def _normalize_size_table(
         id_map = id_maps.get(old_variant_id, {})
         normalized["variantId"] = id_map.get("variantId", _canonical_variant_id(row, _json_text(row), len(normalized_rows) + 1))
         normalized["partId"] = id_map.get(old_part_id, _canonical_part_id_from_row(row))
-        if normalized["variantId"] in known_variant_ids and normalized["partId"] not in CORE_COMPONENT_IDS:
-            continue
         normalized_rows.append(normalized)
 
     normalized_rows = _dedupe_size_rows(normalized_rows)
-    normalized_rows = _ensure_core_size_rows(normalized_rows, known_variant_ids)
     normalized_rows.sort(
         key=lambda row: (
             variant_index.get(row.get("variantId"), 1000),
@@ -292,30 +265,6 @@ def _merge_component(left: dict[str, Any], right: dict[str, Any]) -> dict[str, A
     return merged
 
 
-def _ensure_core_components(components: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    by_id = {str(component.get("id")): component for component in components if component.get("id") in CORE_COMPONENT_IDS}
-    return [by_id.get(component_id) or _placeholder_component(component_id, name, category) for component_id, name, category in CORE_COMPONENTS]
-
-
-def _placeholder_component(component_id: str, name: str, category: str) -> dict[str, Any]:
-    return {
-        "id": component_id,
-        "name": name,
-        "category": category,
-        "quantity": {},
-        "shape": {},
-        "display": {},
-        "annotations": [
-            {
-                "kind": "note",
-                "text": "AI输出缺少该核心裁片，已由后置规范化补齐占位，尺寸需复核。",
-                "placement": "below",
-            }
-        ],
-        "dimensions": {},
-    }
-
-
 def _dedupe_size_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     deduped: dict[tuple[str, str], dict[str, Any]] = {}
     for row in rows:
@@ -333,29 +282,6 @@ def _merge_size_row(left: dict[str, Any], right: dict[str, Any]) -> dict[str, An
         if not merged.get(key) and value:
             merged[key] = value
     return merged
-
-
-def _ensure_core_size_rows(rows: list[dict[str, Any]], known_variant_ids: set[str]) -> list[dict[str, Any]]:
-    by_key = {(str(row.get("variantId") or ""), str(row.get("partId") or "")): row for row in rows}
-    for variant_id in known_variant_ids:
-        for component_id, name, _category in CORE_COMPONENTS:
-            key = (variant_id, component_id)
-            if key not in by_key:
-                by_key[key] = {"variantId": variant_id, "partId": component_id, "partName": name}
-    return list(by_key.values())
-
-
-def _is_known_windsor_variant(variant_id: str, text: str) -> bool:
-    normalized_text = text.replace("×", "x").replace("*", "x")
-    return (
-        variant_id in KNOWN_WINDSOR_VARIANT_IDS
-        or "1010103855" in text
-        or "1010103856" in text
-        or "1010103857" in text
-        or "1010103858" in text
-        or "200x230" in normalized_text
-        or "248x248" in normalized_text
-    )
 
 
 def _number_or_large(value: Any) -> int:

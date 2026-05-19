@@ -58,21 +58,18 @@ def test_normalizer_canonicalizes_windsor_variant_and_component_ids():
         "quilt-lining-main",
         "quilt-face-lower-small-panel",
         "bedsheet",
-        "pillowcase-short",
     ]
     assert [component["category"] for component in variant["components"]] == [
         "quilt-face",
         "quilt-lining",
         "quilt-face",
         "bedsheet",
-        "pillowcase",
     ]
     assert [(row["variantId"], row["partId"]) for row in normalized["sizeTable"]["rows"]] == [
         ("1010103855_1010103857", "quilt-face-main"),
         ("1010103855_1010103857", "quilt-lining-main"),
         ("1010103855_1010103857", "quilt-face-lower-small-panel"),
         ("1010103855_1010103857", "bedsheet"),
-        ("1010103855_1010103857", "pillowcase-short"),
     ]
 
 
@@ -100,7 +97,7 @@ def test_normalizer_uses_size_fallback_when_skus_are_missing():
     assert normalized["sizeTable"]["rows"][0]["variantId"] == "queen-248x248"
 
 
-def test_normalizer_backfills_known_windsor_core_components_and_filters_drift():
+def test_normalizer_does_not_backfill_fixed_windsor_placeholders():
     payload = {
         "schemaVersion": "1.0.0",
         "documentType": "product-layout",
@@ -133,25 +130,57 @@ def test_normalizer_backfills_known_windsor_core_components_and_filters_drift():
 
     assert [component["id"] for component in variant["components"]] == [
         "quilt-face-main",
-        "quilt-lining-main",
-        "quilt-face-lower-small-panel",
-        "bedsheet",
         "pillowcase-short",
     ]
     assert [component["category"] for component in variant["components"]] == [
         "quilt-face",
-        "quilt-lining",
-        "quilt-face",
-        "bedsheet",
         "pillowcase",
     ]
     assert [(row["variantId"], row["partId"]) for row in normalized["sizeTable"]["rows"]] == [
         ("1010103856_1010103858", "quilt-face-main"),
-        ("1010103856_1010103858", "quilt-lining-main"),
-        ("1010103856_1010103858", "quilt-face-lower-small-panel"),
-        ("1010103856_1010103858", "bedsheet"),
         ("1010103856_1010103858", "pillowcase-short"),
     ]
+    assert "AI输出缺少" not in str(normalized)
+
+
+def test_normalizer_does_not_treat_other_product_with_same_sizes_as_windsor():
+    payload = {
+        "schemaVersion": "1.0.0",
+        "documentType": "product-layout",
+        "meta": {"productName": "天丝棉绣花三/四件套", "flowerName": "筝筝日上"},
+        "technicalRequirements": [],
+        "sizeTable": {
+            "rows": [
+                {"variantId": "1030100823", "partId": "border", "partName": "被面三方拼边用"},
+                {"variantId": "1030100823", "partId": "bedsheet", "partName": "床单"},
+            ]
+        },
+        "variants": [
+            {
+                "id": "1030100823",
+                "label": "1030100823 150×215被套 / 200×230床单",
+                "layout": {},
+                "components": [
+                    {"id": "border", "name": "被面三方拼边用", "category": "quilt-face"},
+                    {"id": "bedsheet", "name": "床单", "category": "bedsheet"},
+                ],
+            }
+        ],
+        "titleBlock": {},
+    }
+
+    normalized = normalize_product_layout(payload, {})
+
+    assert normalized["variants"][0]["id"] == "1030100823"
+    assert [component["id"] for component in normalized["variants"][0]["components"]] == [
+        "quilt-face-main",
+        "bedsheet",
+    ]
+    assert [(row["variantId"], row["partId"]) for row in normalized["sizeTable"]["rows"]] == [
+        ("1030100823", "quilt-face-main"),
+        ("1030100823", "bedsheet"),
+    ]
+    assert "pillowcase-short" not in str(normalized)
 
 
 def test_normalizer_classifies_pillow_small_page_as_pillowcase_not_quilt_panel():

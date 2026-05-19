@@ -105,6 +105,29 @@ def test_codex_bridge_separates_variadic_image_arguments_from_prompt():
     assert result["meta"]["productName"] == "图片参数"
 
 
+def test_codex_bridge_includes_domain_skill_in_prompt():
+    expected = _payload("排版图技能")
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(expected, ensure_ascii=False))
+        prompt = command[-1]
+        assert "床品产品排版图分析 Skill" in prompt
+        assert "CAD/PDF 渲染优先" in prompt
+        assert "不要把洗涤注意事项当作排版图技术要求" in prompt
+        assert "不要使用固定产品样例补齐缺失数据" in prompt
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[],
+        prompt="按附件分析",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "排版图技能"
+
+
 def test_codex_bridge_raises_on_cli_failure():
     def fake_runner(command, cwd, timeout, env, **kwargs):
         return SimpleNamespace(returncode=1, stdout="failed stdout", stderr="failed stderr")

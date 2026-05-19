@@ -181,6 +181,9 @@ def _codex_prompt(prompt: str, parameters: dict[str, Any], manifest: list[dict[s
 文件清单：
 {json.dumps(manifest, ensure_ascii=False, indent=2)}
 
+分析 Skill：
+{_product_layout_skill_text()}
+
 输出硬性要求：
 1. 只输出 JSON，不要 Markdown，不要解释文字。
 2. 顶层必须直接包含 schemaVersion、documentType、meta、technicalRequirements、sizeTable、variants、titleBlock。
@@ -261,6 +264,11 @@ def _codex_prompt(prompt: str, parameters: dict[str, Any], manifest: list[dict[s
   }}
 }}
 """
+
+
+def _product_layout_skill_text() -> str:
+    skill_path = Path(__file__).parent / "ai_skills" / "product_layout.md"
+    return skill_path.read_text(encoding="utf-8")
 
 
 def _extracted_text_markdown(extracted_files: list[dict[str, Any]]) -> str:
