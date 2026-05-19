@@ -13,6 +13,17 @@ def test_home_page_serves_upload_interface():
     assert "产品排版图 JSON Demo" in response.text
     assert "/api/layouts/jobs" in response.text
     assert "结构化参数 JSON" not in response.text
+    assert "id=\"pipeline\"" in response.text
+    assert "id=\"file-summary\"" in response.text
+
+
+def test_frontend_script_contains_generation_progress_states():
+    response = client.get("/static/app.js")
+
+    assert response.status_code == 200
+    assert "生成中" in response.text
+    assert "setPhase" in response.text
+    assert "pollJob" in response.text
 
 
 def test_generate_layout_api_accepts_files_and_returns_ai_layout_json(monkeypatch):

@@ -8,17 +8,25 @@
   </head>
   <body>
     <main class="shell">
+      <header class="topbar">
+        <div>
+          <p class="eyebrow">FLOWER / CAD BRIDGE</p>
+          <h1>AI 产品排版图 JSON Demo</h1>
+        </div>
+        <div class="spec-strip" aria-label="接口规格">
+          <span>product-layout</span>
+          <span>local codex</span>
+          <span>async job</span>
+        </div>
+      </header>
+
       <section class="workspace">
         <div class="panel input-panel">
-          <div class="masthead">
-            <p class="eyebrow">FLOWER / CAD BRIDGE</p>
-            <h1>AI 产品排版图 JSON Demo</h1>
-          </div>
-
           <form id="layout-form" action="/api/layouts/jobs" method="post" enctype="multipart/form-data">
             <label class="field">
               <span>上传资料</span>
-              <input name="files" type="file" multiple accept=".doc,.docx,.pdf,.png,.jpg,.jpeg,.txt,.json" />
+              <input id="files" name="files" type="file" multiple accept=".doc,.docx,.pdf,.png,.jpg,.jpeg,.txt,.json" />
+              <small id="file-summary" class="field-note">尚未选择文件</small>
             </label>
 
             <label class="field">
@@ -27,9 +35,30 @@
             </label>
 
             <button class="submit" type="submit">
-              <span>生成 JSON</span>
+              <span class="button-spinner" aria-hidden="true"></span>
+              <span class="button-label">生成 JSON</span>
             </button>
           </form>
+
+          <section id="pipeline" class="pipeline" aria-label="生成进度">
+            <div class="pipeline-track"><span id="pipeline-fill"></span></div>
+            <div class="step active" data-phase="ready">
+              <span class="step-index">01</span>
+              <span>待提交</span>
+            </div>
+            <div class="step" data-phase="queued">
+              <span class="step-index">02</span>
+              <span>排队</span>
+            </div>
+            <div class="step" data-phase="processing">
+              <span class="step-index">03</span>
+              <span>生成中</span>
+            </div>
+            <div class="step" data-phase="completed">
+              <span class="step-index">04</span>
+              <span>完成</span>
+            </div>
+          </section>
         </div>
 
         <div class="panel output-panel">
@@ -39,6 +68,10 @@
               <h2>返回结果</h2>
             </div>
             <span id="status" class="status">待生成</span>
+          </div>
+          <div id="run-meta" class="run-meta">
+            <span>job: -</span>
+            <span>elapsed: 00:00</span>
           </div>
           <pre id="result" class="result">上传文件后，AI 会在后台分析资料；网页会自动刷新任务状态并显示 product-layout JSON。</pre>
         </div>
