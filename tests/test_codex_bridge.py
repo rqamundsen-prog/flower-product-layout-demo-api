@@ -58,6 +58,29 @@ def test_codex_bridge_writes_inputs_and_reads_last_message_json(tmp_path):
     assert calls[0][2] == 12
 
 
+def test_codex_bridge_uses_configured_absolute_codex_binary(monkeypatch):
+    calls = []
+    expected = _payload("绝对路径")
+    codex_bin = "/Applications/Codex.app/Contents/Resources/codex"
+    monkeypatch.setenv("CODEX_BIN", codex_bin)
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        calls.append(command)
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(expected, ensure_ascii=False))
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "绝对路径"
+    assert calls[0][0] == codex_bin
+
+
 def test_codex_bridge_extracts_json_from_markdown_fenced_output():
     expected = _payload("围栏输出")
 

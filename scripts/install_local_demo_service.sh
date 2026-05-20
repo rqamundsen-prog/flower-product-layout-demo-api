@@ -5,6 +5,10 @@ SOURCE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 RUNTIME_DIR="${FLOWER_RUNTIME_DIR:-$HOME/flower-server}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$(command -v cloudflared)}"
+CODEX_BIN="${CODEX_BIN:-$(command -v codex || true)}"
+if [[ -z "$CODEX_BIN" && -x /Applications/Codex.app/Contents/Resources/codex ]]; then
+  CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex"
+fi
 USER_ID="$(id -u)"
 LAUNCH_AGENTS_DIR="$HOME/Library/LaunchAgents"
 
@@ -15,6 +19,11 @@ fi
 
 if [[ -z "$CLOUDFLARED_BIN" ]]; then
   echo "cloudflared not found" >&2
+  exit 1
+fi
+
+if [[ -z "$CODEX_BIN" ]]; then
+  echo "codex not found" >&2
   exit 1
 fi
 
@@ -86,6 +95,8 @@ cat > "$RUNTIME_DIR/ops/launchd/com.flower.demo-api.plist" <<EOF
     <string>600</string>
     <key>FLOWER_MAX_RENDERED_PAGES</key>
     <string>8</string>
+    <key>CODEX_BIN</key>
+    <string>$CODEX_BIN</string>
   </dict>
 </dict>
 </plist>

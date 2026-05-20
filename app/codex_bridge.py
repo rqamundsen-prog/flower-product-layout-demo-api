@@ -12,6 +12,7 @@ from typing import Any, Callable
 
 CODEX_MODEL = os.getenv("CODEX_MODEL", "gpt-5.5")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "600"))
+CODEX_BIN = os.getenv("CODEX_BIN", "codex")
 
 
 class CodexConfigurationError(RuntimeError):
@@ -56,8 +57,9 @@ def generate_layout_via_codex(
     runner: Runner | None = None,
     timeout_seconds: int = CODEX_TIMEOUT_SECONDS,
 ) -> dict[str, Any]:
-    if runner is None and shutil.which("codex") is None:
-        raise CodexConfigurationError("codex CLI is not installed or not on PATH")
+    codex_bin = os.getenv("CODEX_BIN", CODEX_BIN)
+    if runner is None and shutil.which(codex_bin) is None:
+        raise CodexConfigurationError(f"codex CLI is not installed or not executable: {codex_bin}")
 
     with tempfile.TemporaryDirectory(prefix="flower-codex-") as workdir:
         workdir_path = Path(workdir)
@@ -73,7 +75,7 @@ def generate_layout_via_codex(
         prompt_path = workdir_path / "prompt.md"
         prompt_path.write_text(_codex_prompt(prompt, parameters, manifest), encoding="utf-8")
 
-        command = _codex_command(workdir_path, output_path, prompt_path, manifest)
+        command = _codex_command(workdir_path, output_path, prompt_path, manifest, codex_bin)
         completed = _run(command, workdir_path, timeout_seconds, runner)
         if completed.returncode != 0:
             raise CodexExecutionError(_failure_message(completed))
@@ -90,9 +92,10 @@ def _codex_command(
     output_path: Path,
     prompt_path: Path,
     manifest: list[dict[str, Any]],
+    codex_bin: str = CODEX_BIN,
 ) -> list[str]:
     command = [
-        "codex",
+        codex_bin,
         "--ask-for-approval",
         "never",
         "exec",
