@@ -55,7 +55,7 @@ cat > "$RUNTIME_DIR/scripts/run_tunnel.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
 cd "$RUNTIME_DIR"
-exec "$CLOUDFLARED_BIN" tunnel --url http://127.0.0.1:8000
+exec "$CLOUDFLARED_BIN" tunnel --protocol http2 --url http://127.0.0.1:8000
 EOF
 
 cat > "$RUNTIME_DIR/scripts/run_gateway_sync.sh" <<EOF
@@ -84,6 +84,7 @@ while true; do
       echo "Updated fixed gateway origin to \$origin_url"
     else
       echo "Tunnel URL found but not healthy: \$origin_url" >&2
+      launchctl kickstart -k "gui/$(id -u)/com.flower.demo-tunnel" || true
     fi
   fi
 
