@@ -58,6 +58,7 @@ form.addEventListener("submit", async (event) => {
   } catch (error) {
     result.textContent = JSON.stringify({ error: String(error.message || error) }, null, 2);
     setPhase("failed", "错误");
+    setRunMeta(currentJobId(), "failed");
   } finally {
     endGenerating();
   }
@@ -83,6 +84,7 @@ async function pollJob(statusUrl) {
     }
 
     if (body.status === "failed") {
+      setRunMeta(body.jobId, "failed");
       throw new Error(body.error || "AI 任务失败");
     }
 

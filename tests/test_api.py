@@ -24,6 +24,7 @@ def test_frontend_script_contains_generation_progress_states():
     assert "生成中" in response.text
     assert "setPhase" in response.text
     assert "pollJob" in response.text
+    assert 'setRunMeta(currentJobId(), "failed")' in response.text
 
 
 def test_generate_layout_api_accepts_files_and_returns_ai_layout_json(monkeypatch):

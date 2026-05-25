@@ -128,6 +128,83 @@ def test_codex_bridge_separates_variadic_image_arguments_from_prompt():
     assert result["meta"]["productName"] == "图片参数"
 
 
+def test_codex_bridge_skips_office_rendered_images_when_text_was_extracted():
+    expected = _payload("跳过Office图片")
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(expected, ensure_ascii=False))
+        assert "--image" not in command
+        assert command[command.index("--model") + 1] == "gpt-5.3-codex-spark"
+        manifest = json.loads((Path(cwd) / "manifest.json").read_text())
+        assert manifest[1]["derivedFrom"] == "transfer.doc"
+        assert manifest[1]["sourcePage"] == 1
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "transfer.doc",
+                "kind": "document",
+                "contentType": "application/msword",
+                "text": "花名 筝筝日上 品名 天丝棉绣花三/四件套 " * 20,
+                "content": b"office bytes",
+            },
+            {
+                "filename": "transfer.doc.page-1.png",
+                "kind": "image",
+                "contentType": "image/png",
+                "text": "[Rendered PDF page 1 from transfer.doc]",
+                "content": b"page png",
+                "derivedFrom": "transfer.doc",
+                "sourcePage": 1,
+            },
+        ],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "跳过Office图片"
+
+
+def test_codex_bridge_keeps_pdf_rendered_images_for_layout_analysis():
+    expected = _payload("保留PDF图片")
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(expected, ensure_ascii=False))
+        assert "--image" in command
+        assert command[command.index("--model") + 1] == "gpt-5.4-mini"
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "layout.pdf",
+                "kind": "pdf",
+                "contentType": "application/pdf",
+                "text": "[PDF uploaded: layout.pdf]",
+                "content": b"%PDF",
+            },
+            {
+                "filename": "layout.pdf.page-1.png",
+                "kind": "image",
+                "contentType": "image/png",
+                "text": "[Rendered PDF page 1 from layout.pdf]",
+                "content": b"page png",
+                "derivedFrom": "layout.pdf",
+                "sourcePage": 1,
+            },
+        ],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "保留PDF图片"
+
+
 def test_codex_bridge_includes_domain_skill_in_prompt():
     expected = _payload("排版图技能")
 
@@ -136,6 +213,9 @@ def test_codex_bridge_includes_domain_skill_in_prompt():
         output_path.write_text(json.dumps(expected, ensure_ascii=False))
         prompt = command[-1]
         assert "床品产品排版图分析 Skill" in prompt
+        assert "已提取文本内容" in prompt
+        assert "不要调用 shell" in prompt
+        assert "不要自行尝试破解或长时间转换" in prompt
         assert "CAD/PDF 渲染优先" in prompt
         assert "不要把洗涤注意事项当作排版图技术要求" in prompt
         assert "不要使用固定产品样例补齐缺失数据" in prompt

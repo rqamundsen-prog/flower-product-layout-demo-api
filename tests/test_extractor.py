@@ -5,7 +5,7 @@ from pathlib import Path
 
 from fastapi import UploadFile
 
-from app.extractor import extract_uploaded_files, extract_visual_references
+from app.extractor import extract_text, extract_uploaded_files, extract_visual_references
 
 
 def test_pdf_upload_is_rendered_into_visual_reference_images(monkeypatch):
@@ -75,3 +75,37 @@ def test_uploaded_files_include_originals_and_derived_visuals(monkeypatch):
     assert [item["filename"] for item in extracted] == ["layout.pdf", "layout.pdf.page-1.png"]
     assert extracted[0]["kind"] == "pdf"
     assert extracted[1]["kind"] == "image"
+
+
+def test_doc_text_extraction_uses_soffice_when_textutil_returns_empty(monkeypatch):
+    def fake_run(command, check, capture_output, timeout):
+        if command[0] == "textutil":
+            return subprocess.CompletedProcess(command, 0, b"", b"not a textutil-readable doc")
+        if command[0] == "soffice":
+            source = Path(command[-1])
+            source.with_suffix(".txt").write_text("花名\t筝筝日上\n品名\t天丝棉绣花三/四件套", encoding="utf-8")
+            return subprocess.CompletedProcess(command, 0, b"", b"")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+
+    text = extract_text("transfer.doc", b"binary office bytes", None)
+
+    assert "筝筝日上" in text
+    assert "天丝棉绣花" in text
+
+
+def test_doc_text_extraction_does_not_decode_binary_when_extractors_fail(monkeypatch):
+    def fake_run(command, check, capture_output, timeout):
+        if command[0] == "textutil":
+            return subprocess.CompletedProcess(command, 0, b"", b"not a textutil-readable doc")
+        if command[0] == "soffice":
+            return subprocess.CompletedProcess(command, 1, b"", b"conversion failed")
+        raise AssertionError(command)
+
+    monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+
+    text = extract_text("transfer.doc", b"\xd0\xcf\x11\xe0" + (b"\x00" * 100), None)
+
+    assert "text extraction unavailable" in text
+    assert "\xd0\xcf" not in text

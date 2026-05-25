@@ -41,6 +41,7 @@ fi
 
 NPX_DIR="$(dirname "$NPX_BIN")"
 NODE_DIR="$(dirname "$NODE_BIN")"
+SERVICE_PATH="$NODE_DIR:$NPX_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 mkdir -p "$RUNTIME_DIR" "$LAUNCH_AGENTS_DIR"
 rsync -a \
@@ -56,6 +57,7 @@ mkdir -p "$RUNTIME_DIR/logs" "$RUNTIME_DIR/scripts" "$RUNTIME_DIR/ops/launchd"
 cat > "$RUNTIME_DIR/scripts/run_api.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$SERVICE_PATH"
 cd "$RUNTIME_DIR"
 exec "$PYTHON_BIN" -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 EOF
@@ -63,6 +65,7 @@ EOF
 cat > "$RUNTIME_DIR/scripts/run_tunnel.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$SERVICE_PATH"
 cd "$RUNTIME_DIR"
 exec "$CLOUDFLARED_BIN" tunnel --protocol http2 --url http://127.0.0.1:8000
 EOF
@@ -70,7 +73,7 @@ EOF
 cat > "$RUNTIME_DIR/scripts/run_gateway_sync.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
-export PATH="$NODE_DIR:$NPX_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
+export PATH="$SERVICE_PATH"
 
 cd "$RUNTIME_DIR"
 STATE_FILE="$RUNTIME_DIR/logs/current_gateway_origin.txt"
@@ -145,8 +148,10 @@ cat > "$RUNTIME_DIR/ops/launchd/com.flower.demo-api.plist" <<EOF
   <string>$RUNTIME_DIR/logs/api.err.log</string>
   <key>EnvironmentVariables</key>
   <dict>
+    <key>PATH</key>
+    <string>$SERVICE_PATH</string>
     <key>CODEX_MODEL</key>
-    <string>gpt-5.5</string>
+    <string>auto</string>
     <key>CODEX_TIMEOUT_SECONDS</key>
     <string>600</string>
     <key>FLOWER_MAX_RENDERED_PAGES</key>
@@ -203,7 +208,7 @@ cat > "$RUNTIME_DIR/ops/launchd/com.flower.demo-gateway-sync.plist" <<EOF
   <key>EnvironmentVariables</key>
   <dict>
     <key>PATH</key>
-    <string>$NODE_DIR:$NPX_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+    <string>$SERVICE_PATH</string>
   </dict>
   <key>StandardOutPath</key>
   <string>$RUNTIME_DIR/logs/gateway-sync.out.log</string>

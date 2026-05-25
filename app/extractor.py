@@ -14,6 +14,7 @@ from fastapi import UploadFile
 MAX_RENDERED_PAGES = int(os.getenv("FLOWER_MAX_RENDERED_PAGES", "8"))
 RENDER_DPI = int(os.getenv("FLOWER_RENDER_DPI", "180"))
 RENDER_TIMEOUT_SECONDS = int(os.getenv("FLOWER_RENDER_TIMEOUT_SECONDS", "30"))
+OFFICE_TEXT_TIMEOUT_SECONDS = int(os.getenv("FLOWER_OFFICE_TEXT_TIMEOUT_SECONDS", "30"))
 OFFICE_SUFFIXES = {".doc", ".docx"}
 
 
@@ -52,7 +53,11 @@ def extract_text(filename: str, content: bytes, content_type: str | None = None)
     if suffix == ".docx":
         return _extract_docx_text(content)
     if suffix == ".doc":
-        return _extract_with_textutil(filename, content) or _decode_text(content)
+        return (
+            _extract_with_textutil(filename, content)
+            or _extract_office_text_with_soffice(filename, content)
+            or f"[Office document uploaded: {filename}; text extraction unavailable. Use rendered page images.]"
+        )
     if suffix == ".pdf":
         return _extract_pdf_text(filename, content) or f"[PDF uploaded: {filename}]"
     if (content_type or "").startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp"}:
@@ -111,6 +116,32 @@ def _extract_with_textutil(filename: str, content: bytes) -> str:
         except (FileNotFoundError, subprocess.TimeoutExpired):
             return ""
     return result.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def _extract_office_text_with_soffice(filename: str, content: bytes) -> str:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_path = Path(temp_dir)
+        source_path = temp_path / _safe_filename(filename)
+        source_path.write_bytes(content)
+        try:
+            result = subprocess.run(
+                ["soffice", "--headless", "--convert-to", "txt", "--outdir", str(temp_path), str(source_path)],
+                check=False,
+                capture_output=True,
+                timeout=OFFICE_TEXT_TIMEOUT_SECONDS,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+        if result.returncode != 0:
+            return ""
+
+        txt_path = source_path.with_suffix(".txt")
+        if not txt_path.exists():
+            matches = sorted(temp_path.glob("*.txt"))
+            if not matches:
+                return ""
+            txt_path = matches[0]
+        return _decode_text(txt_path.read_bytes()).strip()
 
 
 def _extract_pdf_text(filename: str, content: bytes) -> str:
