@@ -6,6 +6,7 @@ RUNTIME_DIR="${FLOWER_RUNTIME_DIR:-$HOME/flower-server}"
 PYTHON_BIN="${PYTHON_BIN:-$(command -v python)}"
 CLOUDFLARED_BIN="${CLOUDFLARED_BIN:-$(command -v cloudflared)}"
 NPX_BIN="${NPX_BIN:-$(command -v npx || true)}"
+NODE_BIN="${NODE_BIN:-$(command -v node || true)}"
 CODEX_BIN="${CODEX_BIN:-$(command -v codex || true)}"
 if [[ -z "$CODEX_BIN" && -x /Applications/Codex.app/Contents/Resources/codex ]]; then
   CODEX_BIN="/Applications/Codex.app/Contents/Resources/codex"
@@ -32,6 +33,14 @@ if [[ -z "$NPX_BIN" ]]; then
   echo "npx not found" >&2
   exit 1
 fi
+
+if [[ -z "$NODE_BIN" ]]; then
+  echo "node not found" >&2
+  exit 1
+fi
+
+NPX_DIR="$(dirname "$NPX_BIN")"
+NODE_DIR="$(dirname "$NODE_BIN")"
 
 mkdir -p "$RUNTIME_DIR" "$LAUNCH_AGENTS_DIR"
 rsync -a \
@@ -61,6 +70,7 @@ EOF
 cat > "$RUNTIME_DIR/scripts/run_gateway_sync.sh" <<EOF
 #!/usr/bin/env bash
 set -euo pipefail
+export PATH="$NODE_DIR:$NPX_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
 cd "$RUNTIME_DIR"
 STATE_FILE="$RUNTIME_DIR/logs/current_gateway_origin.txt"
@@ -190,6 +200,11 @@ cat > "$RUNTIME_DIR/ops/launchd/com.flower.demo-gateway-sync.plist" <<EOF
   <true/>
   <key>KeepAlive</key>
   <true/>
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>PATH</key>
+    <string>$NODE_DIR:$NPX_DIR:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+  </dict>
   <key>StandardOutPath</key>
   <string>$RUNTIME_DIR/logs/gateway-sync.out.log</string>
   <key>StandardErrorPath</key>
