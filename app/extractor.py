@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import io
 import os
 import shutil
 import subprocess
@@ -13,11 +14,13 @@ from fastapi import UploadFile
 
 
 MAX_RENDERED_PAGES = int(os.getenv("FLOWER_MAX_RENDERED_PAGES", "8"))
-RENDER_DPI = int(os.getenv("FLOWER_RENDER_DPI", "180"))
+RENDER_DPI = int(os.getenv("FLOWER_RENDER_DPI", "90"))
 RENDER_TIMEOUT_SECONDS = int(os.getenv("FLOWER_RENDER_TIMEOUT_SECONDS", "30"))
 OFFICE_TEXT_TIMEOUT_SECONDS = int(os.getenv("FLOWER_OFFICE_TEXT_TIMEOUT_SECONDS", "30"))
 IMAGE_OCR_ENABLED = os.getenv("FLOWER_IMAGE_OCR", "1").lower() not in {"0", "false", "no"}
 IMAGE_OCR_TIMEOUT_SECONDS = int(os.getenv("FLOWER_IMAGE_OCR_TIMEOUT_SECONDS", "60"))
+AI_IMAGE_MAX_WIDTH = int(os.getenv("FLOWER_AI_IMAGE_MAX_WIDTH", "900"))
+AI_IMAGE_JPEG_QUALITY = int(os.getenv("FLOWER_AI_IMAGE_JPEG_QUALITY", "82"))
 OFFICE_SUFFIXES = {".doc", ".docx"}
 
 
@@ -220,18 +223,23 @@ def _render_pdf_pages(filename: str, content: bytes) -> list[dict[str, Any]]:
         rendered = []
         for page_index, page_path in enumerate(_rendered_page_paths(output_prefix), start=1):
             image_content = page_path.read_bytes()
+            ai_filename, ai_content_type, ai_content = _optimize_image_for_ai(
+                f"{filename}.page-{page_index}.png",
+                image_content,
+            )
             visual_text, ocr_text = _visual_text_with_ocr(
                 f"[Rendered PDF page {page_index} from {filename} for visual/layout reference]",
                 page_path.name,
                 image_content,
             )
             entry = {
-                "filename": f"{filename}.page-{page_index}.png",
-                "contentType": "image/png",
+                "filename": ai_filename,
+                "contentType": ai_content_type,
                 "kind": "image",
                 "text": visual_text,
-                "content": image_content,
-                "size": len(image_content),
+                "content": ai_content,
+                "size": len(ai_content),
+                "originalSize": len(image_content),
                 "derivedFrom": filename,
                 "sourcePage": page_index,
             }
@@ -302,6 +310,46 @@ def _extract_image_ocr(filename: str, content: bytes) -> str:
     if result.returncode != 0:
         return ""
     return result.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def _optimize_image_for_ai(filename: str, content: bytes) -> tuple[str, str, bytes]:
+    if not _looks_like_supported_image(content):
+        return filename, _image_content_type(filename), content
+    try:
+        from PIL import Image, ImageOps, UnidentifiedImageError
+    except ImportError:
+        return filename, _image_content_type(filename), content
+
+    try:
+        with Image.open(io.BytesIO(content)) as source:
+            image = ImageOps.exif_transpose(source)
+            if image.width > AI_IMAGE_MAX_WIDTH:
+                ratio = AI_IMAGE_MAX_WIDTH / image.width
+                image = image.resize((AI_IMAGE_MAX_WIDTH, max(1, int(image.height * ratio))), Image.Resampling.LANCZOS)
+            if image.mode in {"RGBA", "LA"}:
+                background = Image.new("RGB", image.size, "white")
+                background.paste(image, mask=image.getchannel("A"))
+                image = background
+            else:
+                image = image.convert("RGB")
+            output = io.BytesIO()
+            image.save(output, format="JPEG", quality=AI_IMAGE_JPEG_QUALITY, optimize=True)
+    except (OSError, UnidentifiedImageError, ValueError):
+        return filename, _image_content_type(filename), content
+
+    optimized_name = f"{Path(filename).with_suffix('')}.ai.jpg"
+    return optimized_name, "image/jpeg", output.getvalue()
+
+
+def _image_content_type(filename: str) -> str:
+    suffix = Path(filename).suffix.lower()
+    if suffix in {".jpg", ".jpeg"}:
+        return "image/jpeg"
+    if suffix == ".webp":
+        return "image/webp"
+    if suffix in {".tif", ".tiff"}:
+        return "image/tiff"
+    return "image/png"
 
 
 def _looks_like_supported_image(content: bytes) -> bool:

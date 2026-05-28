@@ -104,10 +104,12 @@ def test_codex_bridge_separates_variadic_image_arguments_from_prompt():
 
     def fake_runner(command, cwd, timeout, env, **kwargs):
         output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(expected, ensure_ascii=False))
-        assert "--image" in command
-        assert command[-2] == "--"
-        assert "使用图片分析" in command[-1]
+        if "--image" in command:
+            output_path.write_text(json.dumps({"imageChecks": [{"title": "图片参数"}]}, ensure_ascii=False))
+            assert command[-2] == "--"
+            assert "使用图片分析" in command[-1]
+        else:
+            output_path.write_text(json.dumps(expected, ensure_ascii=False))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = generate_layout_via_codex(
@@ -173,9 +175,11 @@ def test_codex_bridge_keeps_pdf_rendered_images_for_layout_analysis():
 
     def fake_runner(command, cwd, timeout, env, **kwargs):
         output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(expected, ensure_ascii=False))
-        assert "--image" in command
-        assert command[command.index("--model") + 1] == "gpt-5.4-mini"
+        if "--image" in command:
+            output_path.write_text(json.dumps({"imageChecks": [{"title": "layout"}]}, ensure_ascii=False))
+            assert command[command.index("--model") + 1] == "gpt-5.4-mini"
+        else:
+            output_path.write_text(json.dumps(expected, ensure_ascii=False))
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = generate_layout_via_codex(
@@ -205,7 +209,7 @@ def test_codex_bridge_keeps_pdf_rendered_images_for_layout_analysis():
     assert result["meta"]["productName"] == "保留PDF图片"
 
 
-def test_codex_bridge_skips_pdf_rendered_images_when_ocr_text_is_sufficient():
+def test_codex_bridge_keeps_pdf_rendered_images_when_ocr_text_is_sufficient():
     ocr_text = "温莎城堡 1010103855 被里 204×234 被面下方小页 17×204 " * 8
     facts = {
         "meta": {"productName": "80S天丝棉印花四件套", "flowerName": "温莎城堡"},
@@ -227,12 +231,15 @@ def test_codex_bridge_skips_pdf_rendered_images_when_ocr_text_is_sufficient():
 
     def fake_runner(command, cwd, timeout, env, **kwargs):
         output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(facts, ensure_ascii=False))
-        assert "--image" not in command
-        assert command[command.index("--model") + 1] == "gpt-5.3-codex-spark"
-        assert "只做视觉事实抽取" in command[-1]
-        assert "温莎城堡" in command[-1]
-        assert "17×204" in command[-1]
+        if "--image" in command:
+            output_path.write_text(json.dumps({"imageChecks": [{"title": "Queen 产品排版图"}]}, ensure_ascii=False))
+            assert command[command.index("--model") + 1] == "gpt-5.4-mini"
+            assert "多模态视觉校验" in command[-1]
+        else:
+            output_path.write_text(json.dumps(facts, ensure_ascii=False))
+            assert "只做视觉事实抽取" in command[-1]
+            assert "温莎城堡" in command[-1]
+            assert "17×204" in command[-1]
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = generate_layout_via_codex(
@@ -262,6 +269,76 @@ def test_codex_bridge_skips_pdf_rendered_images_when_ocr_text_is_sufficient():
 
     assert result["meta"]["productName"] == "80S天丝棉印花四件套"
     assert result["variants"][0]["components"][0]["name"] == "被面下方小页"
+
+
+def test_codex_bridge_runs_compact_multimodal_pass_before_text_structuring():
+    calls = []
+    evidence = {
+        "imageChecks": [
+            {
+                "sourcePage": 1,
+                "title": "Queen 产品排版图",
+                "visibleSkus": ["1010103855"],
+                "visiblePartNames": ["被里", "被面下方小页"],
+                "visibleDimensions": ["204", "17×204"],
+            }
+        ]
+    }
+    facts = {
+        "meta": {"productName": "80S天丝棉印花四件套", "flowerName": "温莎城堡"},
+        "variants": [
+            {
+                "id": "1010103855",
+                "label": "卡其色",
+                "components": [{"id": "quilt-lining-main", "name": "被里", "category": "quilt-lining"}],
+            }
+        ],
+    }
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        calls.append(command)
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        if "--image" in command:
+            output_path.write_text(json.dumps(evidence, ensure_ascii=False))
+            assert "多模态视觉校验" in command[-1]
+            assert "不要生成完整结构" in command[-1]
+        else:
+            output_path.write_text(json.dumps(facts, ensure_ascii=False))
+            assert "多模态视觉校验结果" in command[-1]
+            assert "Queen 产品排版图" in command[-1]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "layout.pdf",
+                "kind": "pdf",
+                "contentType": "application/pdf",
+                "text": "B版 3.6cm",
+                "content": b"%PDF",
+            },
+            {
+                "filename": "layout.pdf.page-1.ai.jpg",
+                "kind": "image",
+                "contentType": "image/jpeg",
+                "text": "[Rendered PDF page 1 from layout.pdf]\n\nOCR text:\n温莎城堡 1010103855 被里 204 被面下方小页 17×204",
+                "ocrText": "温莎城堡 1010103855 被里 204 被面下方小页 17×204",
+                "content": b"\xff\xd8\xff fake jpeg",
+                "derivedFrom": "layout.pdf",
+                "sourcePage": 1,
+            },
+        ],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert len(calls) == 2
+    assert "--image" in calls[0]
+    assert "--image" not in calls[1]
+    assert calls[0][calls[0].index("--model") + 1] == "gpt-5.4-mini"
+    assert calls[1][calls[1].index("--model") + 1] == "gpt-5.3-codex-spark"
+    assert result["meta"]["productName"] == "80S天丝棉印花四件套"
 
 
 def test_codex_bridge_uses_compact_visual_facts_for_image_layout_analysis():
@@ -297,12 +374,16 @@ def test_codex_bridge_uses_compact_visual_facts_for_image_layout_analysis():
 
     def fake_runner(command, cwd, timeout, env, **kwargs):
         output_path = Path(command[command.index("--output-last-message") + 1])
-        output_path.write_text(json.dumps(facts, ensure_ascii=False))
         prompt = command[-1]
-        assert "--image" in command
-        assert "只做视觉事实抽取" in prompt
-        assert "不要生成完整 product-layout schema" in prompt
-        assert '"schemaVersion"' not in prompt
+        if "--image" in command:
+            output_path.write_text(json.dumps({"imageChecks": [{"title": "Queen 产品排版图"}]}, ensure_ascii=False))
+            assert "多模态视觉校验" in prompt
+            assert "不要生成完整结构" in prompt
+        else:
+            output_path.write_text(json.dumps(facts, ensure_ascii=False))
+            assert "只做视觉事实抽取" in prompt
+            assert "不要生成完整 product-layout schema" in prompt
+            assert '"schemaVersion"' not in prompt
         return SimpleNamespace(returncode=0, stdout="", stderr="")
 
     result = generate_layout_via_codex(

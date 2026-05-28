@@ -13,7 +13,7 @@ from typing import Any, Callable
 CODEX_MODEL = os.getenv("CODEX_MODEL", "auto")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "600"))
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
-IMAGE_OCR_SKIP_THRESHOLD = int(os.getenv("FLOWER_IMAGE_OCR_SKIP_THRESHOLD", "160"))
+VISUAL_OCR_TEXT_THRESHOLD = int(os.getenv("FLOWER_VISUAL_OCR_TEXT_THRESHOLD", "160"))
 
 
 class CodexConfigurationError(RuntimeError):
@@ -76,7 +76,37 @@ def generate_layout_via_codex(
         output_path = workdir_path / "codex_output.json"
         prompt_path = workdir_path / "prompt.md"
         attached_images = _attached_image_paths(manifest)
-        if attached_images or _has_visual_ocr_text(manifest):
+        if attached_images:
+            visual_evidence_path = workdir_path / "visual_evidence.json"
+            visual_prompt_path = workdir_path / "visual_prompt.md"
+            visual_prompt_path.write_text(
+                _visual_evidence_prompt(prompt, parameters, manifest, extracted_text),
+                encoding="utf-8",
+            )
+            visual_command = _codex_command(workdir_path, visual_evidence_path, visual_prompt_path, manifest, codex_bin)
+            completed = _run(visual_command, workdir_path, timeout_seconds, runner)
+            if completed.returncode != 0:
+                raise CodexExecutionError(_failure_message(completed))
+            if not visual_evidence_path.exists():
+                raise CodexExecutionError("Codex did not write visual evidence JSON")
+            visual_evidence = _loads_codex_json(visual_evidence_path.read_text(encoding="utf-8"))
+            enriched_text = _with_visual_evidence(extracted_text, visual_evidence)
+            prompt_path.write_text(
+                _visual_facts_prompt(prompt, parameters, manifest, enriched_text),
+                encoding="utf-8",
+            )
+            command = _codex_command(workdir_path, output_path, prompt_path, [], codex_bin)
+            completed = _run(command, workdir_path, timeout_seconds, runner)
+            if completed.returncode != 0:
+                raise CodexExecutionError(_failure_message(completed))
+            if not output_path.exists():
+                raise CodexExecutionError("Codex did not write an output JSON file")
+            response = _loads_codex_json(output_path.read_text(encoding="utf-8"))
+            payload = _layout_from_visual_response(response, prompt, parameters, manifest)
+            _validate_payload(payload)
+            return payload
+
+        if _has_visual_ocr_text(manifest):
             prompt_path.write_text(
                 _visual_facts_prompt(prompt, parameters, manifest, extracted_text),
                 encoding="utf-8",
@@ -165,7 +195,7 @@ def _attached_image_paths(manifest: list[dict[str, Any]]) -> list[str]:
 
 def _has_visual_ocr_text(manifest: list[dict[str, Any]]) -> bool:
     return any(
-        item.get("kind") == "image" and int(item.get("ocrTextLength") or 0) >= IMAGE_OCR_SKIP_THRESHOLD
+        item.get("kind") == "image" and int(item.get("ocrTextLength") or 0) >= VISUAL_OCR_TEXT_THRESHOLD
         for item in manifest
     )
 
@@ -228,9 +258,6 @@ def _write_inputs(inputs_dir: Path, extracted_files: list[dict[str, Any]]) -> li
 
 
 def _should_attach_image(item: dict[str, Any], manifest: list[dict[str, Any]]) -> bool:
-    if int(item.get("ocrTextLength") or 0) >= IMAGE_OCR_SKIP_THRESHOLD:
-        return False
-
     derived_from = str(item.get("derivedFrom") or "")
     if not derived_from:
         return True
@@ -410,6 +437,48 @@ def _facts_prompt(prompt: str, parameters: dict[str, Any], manifest: list[dict[s
 """
 
 
+def _visual_evidence_prompt(
+    prompt: str,
+    parameters: dict[str, Any],
+    manifest: list[dict[str, Any]],
+    extracted_text: str,
+) -> str:
+    return f"""你在执行多模态视觉校验。必须看随命令附加的图片，OCR 文本只做辅助。
+
+任务：从图片里快速确认图纸事实，不要生成完整结构，不要输出 product-layout。
+
+只返回 JSON 对象：
+{{
+  "imageChecks": [
+    {{
+      "sourcePage": 1,
+      "title": "图中标题",
+      "visibleSkus": ["图中可见型号"],
+      "visiblePartNames": ["图中可见裁片名"],
+      "visibleDimensions": ["图中可见尺寸"],
+      "visualNotes": ["图片证据或疑点"]
+    }}
+  ]
+}}
+
+用户补充说明：{prompt or "(无)"}
+
+文件清单：
+{json.dumps(_source_manifest_for_visual_facts(manifest), ensure_ascii=False, indent=2)}
+
+OCR/文本摘要：
+{extracted_text[:5000]}
+"""
+
+
+def _with_visual_evidence(extracted_text: str, visual_evidence: dict[str, Any]) -> str:
+    return (
+        f"{extracted_text[:12000]}\n\n"
+        "## 多模态视觉校验结果\n\n"
+        f"{json.dumps(visual_evidence, ensure_ascii=False, indent=2)}"
+    )
+
+
 def _visual_facts_prompt(
     prompt: str,
     parameters: dict[str, Any],
@@ -439,8 +508,12 @@ def _visual_facts_prompt(
 已提取文本：
 {extracted_text[:12000]}
 
-领域规则：
-{_product_layout_skill_text()}
+领域规则摘要：
+- 排版图图片是最高优先级来源；OCR 文本只做辅助，冲突时以图面为准。
+- 重点抽取标题栏、型号、颜色、A/B 版编码、面料幅宽、裁片名、尺寸线、数量、技术要求。
+- 尺寸必须区分成品尺寸、下裁尺寸（面）、下裁尺寸（里）。
+- 不确定的字段写入 notes，不要用历史样例补齐。
+- variant.id 优先使用图面真实型号，面料编码放入 partCode 或 materialCodes。
 
 只返回 JSON 对象，推荐字段：
 {{

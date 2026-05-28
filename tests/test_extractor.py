@@ -4,6 +4,7 @@ import subprocess
 from pathlib import Path
 
 from fastapi import UploadFile
+from PIL import Image
 
 from app.extractor import extract_text, extract_uploaded_files, extract_visual_references
 
@@ -43,6 +44,28 @@ def test_pdf_rendered_visual_text_includes_ocr_when_available(monkeypatch):
     assert visuals[0]["ocrText"] == "温莎城堡\n204×234\n被里"
     assert "OCR text" in visuals[0]["text"]
     assert "204×234" in visuals[0]["text"]
+
+
+def test_pdf_rendered_visual_reference_is_optimized_for_ai(monkeypatch):
+    image = Image.new("RGB", (1600, 1000), "white")
+    buffer = io.BytesIO()
+    image.save(buffer, format="PNG")
+
+    def fake_run(command, check, capture_output, timeout):
+        output_prefix = Path(command[-1])
+        output_prefix.parent.mkdir(parents=True, exist_ok=True)
+        output_prefix.with_name(output_prefix.name + "-1.png").write_bytes(buffer.getvalue())
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+    monkeypatch.setattr("app.extractor._extract_image_ocr", lambda filename, content: "温莎城堡")
+
+    visuals = extract_visual_references("layout.pdf", b"%PDF demo", "application/pdf")
+
+    assert visuals[0]["filename"] == "layout.pdf.page-1.ai.jpg"
+    assert visuals[0]["contentType"] == "image/jpeg"
+    assert visuals[0]["content"].startswith(b"\xff\xd8\xff")
+    assert visuals[0]["originalSize"] == len(buffer.getvalue())
 
 
 def test_office_upload_is_converted_to_pdf_then_rendered(monkeypatch):
