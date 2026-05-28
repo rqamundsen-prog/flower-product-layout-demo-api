@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import os
+import shutil
 import subprocess
 import tempfile
 import zipfile
@@ -15,6 +16,8 @@ MAX_RENDERED_PAGES = int(os.getenv("FLOWER_MAX_RENDERED_PAGES", "8"))
 RENDER_DPI = int(os.getenv("FLOWER_RENDER_DPI", "180"))
 RENDER_TIMEOUT_SECONDS = int(os.getenv("FLOWER_RENDER_TIMEOUT_SECONDS", "30"))
 OFFICE_TEXT_TIMEOUT_SECONDS = int(os.getenv("FLOWER_OFFICE_TEXT_TIMEOUT_SECONDS", "30"))
+IMAGE_OCR_ENABLED = os.getenv("FLOWER_IMAGE_OCR", "1").lower() not in {"0", "false", "no"}
+IMAGE_OCR_TIMEOUT_SECONDS = int(os.getenv("FLOWER_IMAGE_OCR_TIMEOUT_SECONDS", "60"))
 OFFICE_SUFFIXES = {".doc", ".docx"}
 
 
@@ -23,16 +26,19 @@ async def extract_uploaded_files(files: list[UploadFile]) -> list[dict[str, Any]
     for upload in files:
         content = await upload.read()
         filename = upload.filename or "upload.bin"
-        extracted.append(
-            {
-                "filename": filename,
-                "contentType": upload.content_type,
-                "kind": _kind(filename, upload.content_type),
-                "text": extract_text(filename, content, upload.content_type),
-                "content": content,
-                "size": len(content),
-            }
-        )
+        text = extract_text(filename, content, upload.content_type)
+        item = {
+            "filename": filename,
+            "contentType": upload.content_type,
+            "kind": _kind(filename, upload.content_type),
+            "text": text,
+            "content": content,
+            "size": len(content),
+        }
+        ocr_text = _ocr_text_from_visual_text(text)
+        if ocr_text:
+            item["ocrText"] = ocr_text
+        extracted.append(item)
         extracted.extend(extract_visual_references(filename, content, upload.content_type))
     return extracted
 
@@ -61,7 +67,7 @@ def extract_text(filename: str, content: bytes, content_type: str | None = None)
     if suffix == ".pdf":
         return _extract_pdf_text(filename, content) or f"[PDF uploaded: {filename}]"
     if (content_type or "").startswith("image/") or suffix in {".png", ".jpg", ".jpeg", ".webp"}:
-        return f"[Image uploaded for visual/layout reference: {filename}]"
+        return _visual_text_with_ocr(f"[Image uploaded for visual/layout reference: {filename}]", filename, content)[0]
     return _decode_text(content)
 
 
@@ -214,17 +220,25 @@ def _render_pdf_pages(filename: str, content: bytes) -> list[dict[str, Any]]:
         rendered = []
         for page_index, page_path in enumerate(_rendered_page_paths(output_prefix), start=1):
             image_content = page_path.read_bytes()
+            visual_text, ocr_text = _visual_text_with_ocr(
+                f"[Rendered PDF page {page_index} from {filename} for visual/layout reference]",
+                page_path.name,
+                image_content,
+            )
+            entry = {
+                "filename": f"{filename}.page-{page_index}.png",
+                "contentType": "image/png",
+                "kind": "image",
+                "text": visual_text,
+                "content": image_content,
+                "size": len(image_content),
+                "derivedFrom": filename,
+                "sourcePage": page_index,
+            }
+            if ocr_text:
+                entry["ocrText"] = ocr_text
             rendered.append(
-                {
-                    "filename": f"{filename}.page-{page_index}.png",
-                    "contentType": "image/png",
-                    "kind": "image",
-                    "text": f"[Rendered PDF page {page_index} from {filename} for visual/layout reference]",
-                    "content": image_content,
-                    "size": len(image_content),
-                    "derivedFrom": filename,
-                    "sourcePage": page_index,
-                }
+                entry
             )
         return rendered
 
@@ -242,3 +256,59 @@ def _page_sort_key(path: Path) -> int:
 
 def _safe_filename(filename: str) -> str:
     return Path(filename).name.replace("/", "_").replace(":", "_") or "upload"
+
+
+def _visual_text_with_ocr(placeholder: str, filename: str, content: bytes) -> tuple[str, str]:
+    ocr_text = _extract_image_ocr(filename, content)
+    if not ocr_text:
+        return placeholder, ""
+    return f"{placeholder}\n\nOCR text:\n{ocr_text}", ocr_text
+
+
+def _ocr_text_from_visual_text(text: str) -> str:
+    marker = "OCR text:"
+    if marker not in text:
+        return ""
+    return text.split(marker, 1)[1].strip()
+
+
+def _extract_image_ocr(filename: str, content: bytes) -> str:
+    if not IMAGE_OCR_ENABLED:
+        return ""
+    if not _looks_like_supported_image(content):
+        return ""
+
+    swift_bin = shutil.which("swift") or "/usr/bin/swift"
+    script_path = Path(__file__).resolve().parent.parent / "scripts" / "ocr_image.swift"
+    if not Path(swift_bin).exists() or not script_path.exists():
+        return ""
+
+    suffix = Path(filename).suffix.lower()
+    if suffix not in {".png", ".jpg", ".jpeg", ".webp", ".tif", ".tiff"}:
+        suffix = ".png"
+
+    with tempfile.TemporaryDirectory() as temp_dir:
+        image_path = Path(temp_dir) / f"ocr-input{suffix}"
+        image_path.write_bytes(content)
+        try:
+            result = subprocess.run(
+                [swift_bin, str(script_path), str(image_path)],
+                check=False,
+                capture_output=True,
+                timeout=IMAGE_OCR_TIMEOUT_SECONDS,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+    if result.returncode != 0:
+        return ""
+    return result.stdout.decode("utf-8", errors="ignore").strip()
+
+
+def _looks_like_supported_image(content: bytes) -> bool:
+    return (
+        content.startswith(b"\x89PNG\r\n\x1a\n")
+        or content.startswith(b"\xff\xd8\xff")
+        or content.startswith(b"RIFF") and content[8:12] == b"WEBP"
+        or content.startswith(b"MM\x00*")
+        or content.startswith(b"II*\x00")
+    )

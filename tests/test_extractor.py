@@ -17,6 +17,7 @@ def test_pdf_upload_is_rendered_into_visual_reference_images(monkeypatch):
         return subprocess.CompletedProcess(command, 0, b"", b"")
 
     monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+    monkeypatch.setattr("app.extractor._extract_image_ocr", lambda filename, content: "")
 
     visuals = extract_visual_references("layout.pdf", b"%PDF demo", "application/pdf")
 
@@ -25,6 +26,23 @@ def test_pdf_upload_is_rendered_into_visual_reference_images(monkeypatch):
     assert visuals[0]["derivedFrom"] == "layout.pdf"
     assert visuals[0]["content"] == b"page one png"
     assert "PDF page 1" in visuals[0]["text"]
+
+
+def test_pdf_rendered_visual_text_includes_ocr_when_available(monkeypatch):
+    def fake_run(command, check, capture_output, timeout):
+        output_prefix = Path(command[-1])
+        output_prefix.parent.mkdir(parents=True, exist_ok=True)
+        output_prefix.with_name(output_prefix.name + "-1.png").write_bytes(b"page one png")
+        return subprocess.CompletedProcess(command, 0, b"", b"")
+
+    monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+    monkeypatch.setattr("app.extractor._extract_image_ocr", lambda filename, content: "温莎城堡\n204×234\n被里")
+
+    visuals = extract_visual_references("layout.pdf", b"%PDF demo", "application/pdf")
+
+    assert visuals[0]["ocrText"] == "温莎城堡\n204×234\n被里"
+    assert "OCR text" in visuals[0]["text"]
+    assert "204×234" in visuals[0]["text"]
 
 
 def test_office_upload_is_converted_to_pdf_then_rendered(monkeypatch):
@@ -44,6 +62,7 @@ def test_office_upload_is_converted_to_pdf_then_rendered(monkeypatch):
         raise AssertionError(command)
 
     monkeypatch.setattr("app.extractor.subprocess.run", fake_run)
+    monkeypatch.setattr("app.extractor._extract_image_ocr", lambda filename, content: "")
 
     visuals = extract_visual_references("transfer.docx", b"docx bytes", None)
 
@@ -109,3 +128,15 @@ def test_doc_text_extraction_does_not_decode_binary_when_extractors_fail(monkeyp
 
     assert "text extraction unavailable" in text
     assert "\xd0\xcf" not in text
+
+
+def test_image_ocr_is_skipped_for_non_image_bytes(monkeypatch):
+    def fail_run(*args, **kwargs):
+        raise AssertionError("OCR subprocess should not run for invalid image bytes")
+
+    monkeypatch.setattr("app.extractor.subprocess.run", fail_run)
+
+    text = extract_text("layout.png", b"fake image bytes", "image/png")
+
+    assert "Image uploaded" in text
+    assert "OCR text" not in text

@@ -13,6 +13,7 @@ from typing import Any, Callable
 CODEX_MODEL = os.getenv("CODEX_MODEL", "auto")
 CODEX_TIMEOUT_SECONDS = int(os.getenv("CODEX_TIMEOUT_SECONDS", "600"))
 CODEX_BIN = os.getenv("CODEX_BIN", "codex")
+IMAGE_OCR_SKIP_THRESHOLD = int(os.getenv("FLOWER_IMAGE_OCR_SKIP_THRESHOLD", "160"))
 
 
 class CodexConfigurationError(RuntimeError):
@@ -75,6 +76,22 @@ def generate_layout_via_codex(
         output_path = workdir_path / "codex_output.json"
         prompt_path = workdir_path / "prompt.md"
         attached_images = _attached_image_paths(manifest)
+        if attached_images or _has_visual_ocr_text(manifest):
+            prompt_path.write_text(
+                _visual_facts_prompt(prompt, parameters, manifest, extracted_text),
+                encoding="utf-8",
+            )
+            command = _codex_command(workdir_path, output_path, prompt_path, manifest, codex_bin)
+            completed = _run(command, workdir_path, timeout_seconds, runner)
+            if completed.returncode != 0:
+                raise CodexExecutionError(_failure_message(completed))
+            if not output_path.exists():
+                raise CodexExecutionError("Codex did not write an output JSON file")
+            response = _loads_codex_json(output_path.read_text(encoding="utf-8"))
+            payload = _layout_from_visual_response(response, prompt, parameters, manifest)
+            _validate_payload(payload)
+            return payload
+
         if runner is None and not attached_images:
             prompt_path.write_text(
                 _facts_prompt(prompt, parameters, _source_manifest(manifest), _source_text_markdown(extracted_files)),
@@ -146,6 +163,13 @@ def _attached_image_paths(manifest: list[dict[str, Any]]) -> list[str]:
     ]
 
 
+def _has_visual_ocr_text(manifest: list[dict[str, Any]]) -> bool:
+    return any(
+        item.get("kind") == "image" and int(item.get("ocrTextLength") or 0) >= IMAGE_OCR_SKIP_THRESHOLD
+        for item in manifest
+    )
+
+
 def _select_model(attached_images: list[str]) -> str:
     configured_model = os.getenv("CODEX_MODEL", CODEX_MODEL)
     if configured_model and configured_model != "auto":
@@ -196,11 +220,17 @@ def _write_inputs(inputs_dir: Path, extracted_files: list[dict[str, Any]]) -> li
             entry["derivedFrom"] = item["derivedFrom"]
         if item.get("sourcePage"):
             entry["sourcePage"] = item["sourcePage"]
+        ocr_text = str(item.get("ocrText") or _ocr_text_from_visual_text(str(item.get("text") or ""))).strip()
+        if ocr_text:
+            entry["ocrTextLength"] = len(ocr_text)
         manifest.append(entry)
     return manifest
 
 
 def _should_attach_image(item: dict[str, Any], manifest: list[dict[str, Any]]) -> bool:
+    if int(item.get("ocrTextLength") or 0) >= IMAGE_OCR_SKIP_THRESHOLD:
+        return False
+
     derived_from = str(item.get("derivedFrom") or "")
     if not derived_from:
         return True
@@ -380,6 +410,307 @@ def _facts_prompt(prompt: str, parameters: dict[str, Any], manifest: list[dict[s
 """
 
 
+def _visual_facts_prompt(
+    prompt: str,
+    parameters: dict[str, Any],
+    manifest: list[dict[str, Any]],
+    extracted_text: str,
+) -> str:
+    return f"""你是床品 CAD/PDF 排版图视觉信息抽取助手。只做视觉事实抽取，不要生成完整 product-layout schema。
+
+目标：逐页查看随命令附加的图片，结合已提取文本和用户补充说明，抽取能支撑后端生成 CAD/PDF JSON 的事实。
+
+处理约束：
+- 重点看排版图图片中的标题栏、型号、品名、花名、颜色、A/B版编码、面料幅宽、裁片名称、尺寸线、数量、技术要求。
+- 不要调用 shell，不要读取或转换原始 PDF/Office 二进制文件。
+- 不确定的内容写入 notes，不要用历史样例硬补。
+- 输出尽量短，裁片按图面可见信息抽取；不要重复解释。
+- 不要生成完整 product-layout schema；后端会把事实包装成最终结构。
+
+用户补充说明：
+{prompt or "(无)"}
+
+结构化参数：
+{json.dumps(parameters, ensure_ascii=False, indent=2)}
+
+文件清单：
+{json.dumps(_source_manifest_for_visual_facts(manifest), ensure_ascii=False, indent=2)}
+
+已提取文本：
+{extracted_text[:12000]}
+
+领域规则：
+{_product_layout_skill_text()}
+
+只返回 JSON 对象，推荐字段：
+{{
+  "meta": {{
+    "title": "图名",
+    "productName": "品名",
+    "flowerName": "花名",
+    "style": "风格",
+    "scale": "比例",
+    "unit": "单位",
+    "fabric": "面料",
+    "yarnDensity": "纱支密度",
+    "fabricWidth": 250,
+    "promotionDate": "推广时间",
+    "notes": ["不确定项"]
+  }},
+  "technicalRequirements": ["技术要求"],
+  "titleBlockFields": {{"图名": "产品排版图"}},
+  "variants": [
+    {{
+      "id": "型号",
+      "label": "型号/颜色/规格",
+      "color": "颜色",
+      "materialCodes": {{"A版": "编码", "B版": "编码"}},
+      "layout": {{"mode": "fabric-roll", "direction": "horizontal", "fabricWidth": 250, "scale": "1:50"}},
+      "components": [
+        {{
+          "id": "裁片ID",
+          "partCode": "面料编码",
+          "name": "裁片名称",
+          "category": "quilt-face|quilt-lining|bedsheet|pillowcase|text",
+          "quantity": {{"perSet": 1, "unit": "页", "note": "图面标注"}},
+          "shape": {{"type": "rectangle", "width": 204, "height": 234}},
+          "display": {{"showDimensions": true, "dimensionSides": ["width", "height"], "grainDirection": "up"}},
+          "annotations": [{{"kind": "label", "text": "图面文字", "placement": "inside"}}],
+          "dimensions": {{"finishedSize": {{"width": 200, "height": 230}}, "cuttingSizeFace": null, "cuttingSizeBack": null}}
+        }}
+      ]
+    }}
+  ],
+  "sizeRows": [
+    {{"variantId": "型号", "partId": "裁片ID", "partName": "裁片名称", "note": "来源说明"}}
+  ],
+  "notes": ["整体不确定项"]
+}}
+"""
+
+
+def _source_manifest_for_visual_facts(manifest: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    compact = []
+    for item in manifest:
+        entry = {
+            key: item.get(key)
+            for key in ("filename", "kind", "contentType", "size", "textLength", "derivedFrom", "sourcePage")
+            if key in item
+        }
+        compact.append(entry)
+    return compact
+
+
+def _layout_from_visual_response(
+    response: dict[str, Any],
+    prompt: str,
+    parameters: dict[str, Any],
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    if _is_product_layout_payload(response):
+        return response
+    return _layout_from_visual_facts(response, prompt, parameters, manifest)
+
+
+def _is_product_layout_payload(value: dict[str, Any]) -> bool:
+    return value.get("schemaVersion") == "1.0.0" and value.get("documentType") == "product-layout"
+
+
+def _layout_from_visual_facts(
+    facts: dict[str, Any],
+    prompt: str,
+    parameters: dict[str, Any],
+    manifest: list[dict[str, Any]],
+) -> dict[str, Any]:
+    raw_meta = facts.get("meta") if isinstance(facts.get("meta"), dict) else {}
+    meta = dict(raw_meta)
+    meta["title"] = _first_text(meta.get("title") or facts.get("title"), "产品排版图")
+    meta["productName"] = _first_text(meta.get("productName") or facts.get("productName"), "")
+    meta["flowerName"] = _first_text(meta.get("flowerName") or facts.get("flowerName"), "")
+    meta["style"] = _first_text(meta.get("style") or facts.get("style") or parameters.get("style"), "QUEEN")
+    meta["scale"] = _first_text(parameters.get("scale") or meta.get("scale"), "1:50")
+    meta["unit"] = _first_text(parameters.get("unit") or meta.get("unit"), "cm")
+    meta["sourceFiles"] = [str(item.get("filename")) for item in manifest if item.get("kind") != "image"]
+
+    visual_notes = _notes_from_unknown(meta.get("notes")) + _notes_from_unknown(facts.get("notes"))
+    if prompt:
+        visual_notes.append(f"用户补充说明：{prompt}")
+    meta["notes"] = _dedupe_strings(visual_notes)
+
+    variants = _visual_variants(facts, parameters, meta)
+    size_table = _visual_size_table(facts, variants)
+    title_block_fields = _visual_title_block_fields(facts, meta)
+
+    return {
+        "schemaVersion": "1.0.0",
+        "documentType": "product-layout",
+        "meta": meta,
+        "technicalRequirements": _visual_technical_requirements(facts.get("technicalRequirements")),
+        "sizeTable": size_table,
+        "variants": variants,
+        "titleBlock": {
+            "template": _first_text(parameters.get("template"), "queen-standard-a3"),
+            "fields": title_block_fields,
+        },
+    }
+
+
+def _visual_variants(facts: dict[str, Any], parameters: dict[str, Any], meta: dict[str, Any]) -> list[dict[str, Any]]:
+    raw_variants = facts.get("variants") if isinstance(facts.get("variants"), list) else []
+    if not raw_variants and isinstance(facts.get("components"), list):
+        raw_variants = [{"id": "default", "label": meta.get("flowerName") or meta.get("productName") or "default", "components": facts["components"]}]
+
+    variants = []
+    for index, item in enumerate(raw_variants, start=1):
+        if not isinstance(item, dict):
+            continue
+        variant_id = _first_text(item.get("id") or item.get("variantId"), f"variant-{index}")
+        components = [
+            _visual_component(component, component_index)
+            for component_index, component in enumerate(item.get("components") if isinstance(item.get("components"), list) else [], start=1)
+            if isinstance(component, dict)
+        ]
+        variants.append(
+            {
+                **item,
+                "id": variant_id,
+                "label": _first_text(item.get("label"), variant_id),
+                "layout": _visual_layout(item.get("layout"), parameters, meta),
+                "components": components,
+            }
+        )
+
+    if variants:
+        return variants
+
+    return [
+        {
+            "id": "default",
+            "label": meta.get("flowerName") or meta.get("productName") or "default",
+            "layout": _visual_layout({}, parameters, meta),
+            "components": [],
+        }
+    ]
+
+
+def _visual_layout(value: Any, parameters: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
+    layout = dict(value) if isinstance(value, dict) else {}
+    layout.setdefault("mode", "fabric-roll")
+    layout.setdefault("direction", "horizontal")
+    if "fabricWidth" not in layout and meta.get("fabricWidth") is not None:
+        layout["fabricWidth"] = meta.get("fabricWidth")
+    layout.setdefault("gap", 25)
+    layout.setdefault("wrap", True)
+    layout.setdefault("scale", _first_text(parameters.get("scale") or meta.get("scale"), "1:50"))
+    return layout
+
+
+def _visual_component(component: dict[str, Any], index: int) -> dict[str, Any]:
+    name = _first_text(component.get("name") or component.get("partName") or component.get("id"), f"裁片{index}")
+    component_id = _first_text(component.get("id") or component.get("partId"), f"component-{index}")
+    return {
+        **component,
+        "id": component_id,
+        "name": name,
+        "category": _first_text(component.get("category"), "text"),
+        "quantity": component.get("quantity") if isinstance(component.get("quantity"), dict) else {},
+        "shape": component.get("shape") if isinstance(component.get("shape"), dict) else {},
+        "display": component.get("display") if isinstance(component.get("display"), dict) else {},
+        "annotations": component.get("annotations") if isinstance(component.get("annotations"), list) else [],
+        "dimensions": component.get("dimensions") if isinstance(component.get("dimensions"), dict) else {},
+    }
+
+
+def _visual_size_table(facts: dict[str, Any], variants: list[dict[str, Any]]) -> dict[str, Any]:
+    table = facts.get("sizeTable") if isinstance(facts.get("sizeTable"), dict) else {}
+    raw_rows = table.get("rows") if isinstance(table.get("rows"), list) else facts.get("sizeRows")
+    rows = [dict(row) for row in raw_rows if isinstance(row, dict)] if isinstance(raw_rows, list) else []
+    if not rows:
+        rows = [
+            _size_row_from_component(variant, component)
+            for variant in variants
+            for component in variant.get("components", [])
+            if isinstance(component, dict)
+        ]
+    return {
+        "columns": list(table.get("columns") or [
+            "variantId",
+            "partId",
+            "partName",
+            "finishedSize",
+            "cuttingSizeFace",
+            "cuttingSizeBack",
+            "quantity",
+            "note",
+        ]),
+        "rows": rows,
+    }
+
+
+def _size_row_from_component(variant: dict[str, Any], component: dict[str, Any]) -> dict[str, Any]:
+    dimensions = component.get("dimensions") if isinstance(component.get("dimensions"), dict) else {}
+    return {
+        "variantId": variant.get("id"),
+        "partId": component.get("id"),
+        "partName": component.get("name"),
+        "finishedSize": dimensions.get("finishedSize"),
+        "cuttingSizeFace": dimensions.get("cuttingSizeFace"),
+        "cuttingSizeBack": dimensions.get("cuttingSizeBack"),
+        "quantity": component.get("quantity"),
+        "note": "",
+    }
+
+
+def _visual_technical_requirements(value: Any) -> list[dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    requirements = []
+    for index, item in enumerate(value, start=1):
+        if isinstance(item, dict):
+            text = _first_text(item.get("text"), "")
+            number = item.get("no") or index
+        else:
+            text = _first_text(item, "")
+            number = index
+        if text:
+            requirements.append({"no": number, "text": text})
+    return requirements
+
+
+def _visual_title_block_fields(facts: dict[str, Any], meta: dict[str, Any]) -> dict[str, Any]:
+    fields = facts.get("titleBlockFields")
+    if not isinstance(fields, dict):
+        title_block = facts.get("titleBlock") if isinstance(facts.get("titleBlock"), dict) else {}
+        fields = title_block.get("fields") if isinstance(title_block.get("fields"), dict) else {}
+    normalized = dict(fields)
+    normalized.setdefault("图名", meta.get("title") or "产品排版图")
+    normalized.setdefault("品名", meta.get("productName") or "")
+    normalized.setdefault("花名", meta.get("flowerName") or "")
+    normalized.setdefault("风格", meta.get("style") or "")
+    normalized.setdefault("比例", meta.get("scale") or "1:50")
+    normalized.setdefault("单位", meta.get("unit") or "cm")
+    normalized.setdefault("未确定项", meta.get("notes") or [])
+    return normalized
+
+
+def _notes_from_unknown(value: Any) -> list[str]:
+    if isinstance(value, list):
+        return [str(item).strip() for item in value if str(item).strip()]
+    text = _first_text(value, "")
+    return [text] if text else []
+
+
+def _dedupe_strings(values: list[str]) -> list[str]:
+    seen = set()
+    deduped = []
+    for value in values:
+        if value in seen:
+            continue
+        seen.add(value)
+        deduped.append(value)
+    return deduped
+
+
 def _source_manifest(manifest: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return [
         {key: item.get(key) for key in ("filename", "kind", "contentType", "size", "textLength") if key in item}
@@ -391,7 +722,7 @@ def _source_manifest(manifest: list[dict[str, Any]]) -> list[dict[str, Any]]:
 def _source_text_markdown(extracted_files: list[dict[str, Any]]) -> str:
     sections = []
     for item in extracted_files:
-        if item.get("kind") == "image":
+        if item.get("kind") == "image" and not _has_useful_image_text(item):
             continue
         filename = item.get("filename") or "upload"
         kind = item.get("kind") or "file"
@@ -399,6 +730,19 @@ def _source_text_markdown(extracted_files: list[dict[str, Any]]) -> str:
         if text:
             sections.append(f"## {filename} [{kind}]\n\n{text[:12000]}")
     return "\n\n".join(sections) if sections else "(未提取到文字)"
+
+
+def _has_useful_image_text(item: dict[str, Any]) -> bool:
+    if str(item.get("ocrText") or "").strip():
+        return True
+    return bool(_ocr_text_from_visual_text(str(item.get("text") or "")))
+
+
+def _ocr_text_from_visual_text(text: str) -> str:
+    marker = "OCR text:"
+    if marker not in text:
+        return ""
+    return text.split(marker, 1)[1].strip()
 
 
 def _layout_from_facts(

@@ -205,6 +205,137 @@ def test_codex_bridge_keeps_pdf_rendered_images_for_layout_analysis():
     assert result["meta"]["productName"] == "保留PDF图片"
 
 
+def test_codex_bridge_skips_pdf_rendered_images_when_ocr_text_is_sufficient():
+    ocr_text = "温莎城堡 1010103855 被里 204×234 被面下方小页 17×204 " * 8
+    facts = {
+        "meta": {"productName": "80S天丝棉印花四件套", "flowerName": "温莎城堡"},
+        "variants": [
+            {
+                "id": "1010103855",
+                "label": "卡其色",
+                "components": [
+                    {
+                        "id": "quilt-face-lower-small-panel",
+                        "name": "被面下方小页",
+                        "category": "quilt-face",
+                        "shape": {"type": "rectangle", "width": 17, "height": 204},
+                    }
+                ],
+            }
+        ],
+    }
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(facts, ensure_ascii=False))
+        assert "--image" not in command
+        assert command[command.index("--model") + 1] == "gpt-5.3-codex-spark"
+        assert "只做视觉事实抽取" in command[-1]
+        assert "温莎城堡" in command[-1]
+        assert "17×204" in command[-1]
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "layout.pdf",
+                "kind": "pdf",
+                "contentType": "application/pdf",
+                "text": "B版 3.6cm",
+                "content": b"%PDF",
+            },
+            {
+                "filename": "layout.pdf.page-1.png",
+                "kind": "image",
+                "contentType": "image/png",
+                "text": "[Rendered PDF page 1 from layout.pdf]\n\nOCR text:\n" + ocr_text,
+                "ocrText": ocr_text,
+                "content": b"page png",
+                "derivedFrom": "layout.pdf",
+                "sourcePage": 1,
+            },
+        ],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["meta"]["productName"] == "80S天丝棉印花四件套"
+    assert result["variants"][0]["components"][0]["name"] == "被面下方小页"
+
+
+def test_codex_bridge_uses_compact_visual_facts_for_image_layout_analysis():
+    facts = {
+        "meta": {
+            "title": "80S天丝棉印花四件套温莎城堡产品排版图",
+            "productName": "80S天丝棉印花四件套",
+            "flowerName": "温莎城堡",
+            "scale": "1:50",
+            "unit": "cm",
+            "fabricWidth": 250,
+        },
+        "technicalRequirements": ["被套和床单常规抛4cm"],
+        "variants": [
+            {
+                "id": "1010103855",
+                "label": "卡其色常规四件套",
+                "components": [
+                    {
+                        "id": "quilt-lining-main",
+                        "name": "被里主片",
+                        "category": "quilt-lining",
+                        "quantity": {"perSet": 1, "unit": "页"},
+                        "shape": {"type": "rectangle", "width": 204, "height": 234},
+                        "display": {"showDimensions": True},
+                        "annotations": [{"kind": "label", "text": "被里（1套1页）", "placement": "inside"}],
+                        "dimensions": {"finishedSize": {"width": 200, "height": 230}},
+                    }
+                ],
+            }
+        ],
+    }
+
+    def fake_runner(command, cwd, timeout, env, **kwargs):
+        output_path = Path(command[command.index("--output-last-message") + 1])
+        output_path.write_text(json.dumps(facts, ensure_ascii=False))
+        prompt = command[-1]
+        assert "--image" in command
+        assert "只做视觉事实抽取" in prompt
+        assert "不要生成完整 product-layout schema" in prompt
+        assert '"schemaVersion"' not in prompt
+        return SimpleNamespace(returncode=0, stdout="", stderr="")
+
+    result = generate_layout_via_codex(
+        extracted_files=[
+            {
+                "filename": "layout.pdf",
+                "kind": "pdf",
+                "contentType": "application/pdf",
+                "text": "B版 3.6cm",
+                "content": b"%PDF",
+            },
+            {
+                "filename": "layout.pdf.page-1.png",
+                "kind": "image",
+                "contentType": "image/png",
+                "text": "[Rendered PDF page 1 from layout.pdf]",
+                "content": b"page png",
+                "derivedFrom": "layout.pdf",
+                "sourcePage": 1,
+            },
+        ],
+        prompt="",
+        parameters={},
+        runner=fake_runner,
+    )
+
+    assert result["schemaVersion"] == "1.0.0"
+    assert result["documentType"] == "product-layout"
+    assert result["meta"]["productName"] == "80S天丝棉印花四件套"
+    assert result["technicalRequirements"] == [{"no": 1, "text": "被套和床单常规抛4cm"}]
+    assert result["variants"][0]["components"][0]["name"] == "被里主片"
+
+
 def test_codex_bridge_includes_domain_skill_in_prompt():
     expected = _payload("排版图技能")
 
